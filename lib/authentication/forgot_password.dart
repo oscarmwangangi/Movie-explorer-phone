@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:movie_explorer/theme/app_colors.dart';
 import 'package:movie_explorer/reusable/reusable.dart';
 import 'package:movie_explorer/api/api_service.dart';
 
@@ -19,14 +18,23 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   bool _isSuccess = false;
 
   Future<void> _handleReset() async {
-    if (_emailController.text.isEmpty) return;
+    final email = _emailController.text.trim();
+
+    final emailError = validateEmail(email);
+    if (emailError != null) {
+      setState(() {
+        _message = emailError;
+        _isSuccess = false;
+      });
+      return;
+    }
 
     setState(() {
       _isLoading = true;
       _message = null;
     });
 
-    final error = await ApiService.requestPasswordReset(_emailController.text.trim());
+    final error = await ApiService.requestPasswordReset(email);
 
     if (!mounted) return;
 
@@ -96,6 +104,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                         controller: _emailController,
                         hintText: "Email",
                         icon: Icons.email_outlined,
+                        keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _handleReset(),
                       ),
                       const SizedBox(height: 32),
                       Container(

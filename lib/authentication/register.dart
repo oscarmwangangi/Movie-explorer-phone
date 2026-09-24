@@ -22,13 +22,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String? errorMessage;
 
   Future<void> _handleRegister() async {
-    if (passwordController.text != confirmPasswordController.text) {
-      setState(() => errorMessage = "Passwords do not match");
+    final email = emailController.text.trim();
+    final password = passwordController.text;
+    final confirmPassword = confirmPasswordController.text;
+
+    final emailError = validateEmail(email);
+    if (emailError != null) {
+      setState(() => errorMessage = emailError);
       return;
     }
 
-    if (passwordController.text.length < 6) {
-      setState(() => errorMessage = "Password must be at least 6 characters");
+    if (password.isEmpty) {
+      setState(() => errorMessage = "Please enter a password.");
+      return;
+    }
+
+    if (password.length < 6) {
+      setState(() => errorMessage = "Password must be at least 6 characters long.");
+      return;
+    }
+
+    if (password != confirmPassword) {
+      setState(() => errorMessage = "Passwords do not match.");
       return;
     }
 
@@ -37,10 +52,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       errorMessage = null;
     });
 
-    final error = await ApiService.register(
-      emailController.text.trim(),
-      passwordController.text,
-    );
+    final error = await ApiService.register(email, password);
 
     if (!mounted) return;
 
@@ -117,6 +129,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         controller: emailController,
                         hintText: "Email",
                         icon: Icons.email_outlined,
+                        keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.next,
                       ),
                       const SizedBox(height: 20),
                       CustomTextField(
@@ -124,6 +138,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         hintText: "Password",
                         icon: Icons.lock_outline,
                         obscureText: obscureText,
+                        textInputAction: TextInputAction.next,
                         suffixIcon: obscureText ? Icons.visibility_off : Icons.visibility,
                         onSuffixTap: () => setState(() => obscureText = !obscureText),
                       ),
@@ -133,6 +148,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         hintText: "Confirm Password",
                         icon: Icons.lock_clock_outlined,
                         obscureText: obscureText,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _handleRegister(),
                       ),
                       const SizedBox(height: 32),
 
