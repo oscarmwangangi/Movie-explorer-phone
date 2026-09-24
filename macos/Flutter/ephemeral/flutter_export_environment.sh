@@ -1,7 +1,7 @@
 #!/bin/sh
 # This is a generated file; do not edit or check into version control.
 export "FLUTTER_ROOT=C:\Users\user\flutter_windows_3.41.9-stable\flutter"
-export "FLUTTER_APPLICATION_PATH=C:\Users\user\Desktop\projects\files\Movie-explorer-main"
+export "FLUTTER_APPLICATION_PATH=C:\Users\user\Desktop\projects\files\Movie-explorer-git"
 export "COCOAPODS_PARALLEL_CODE_SIGN=true"
 export "FLUTTER_BUILD_DIR=build"
 export "FLUTTER_BUILD_NAME=1.0.0"
