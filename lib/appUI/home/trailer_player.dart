@@ -128,6 +128,13 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> with WindowLi
       setState(() {
         _isMinimized = true;
       });
+      // Try to pause video playback when minimized
+      _winController?.evaluateJavascript(source: """
+        (function() {
+          var vids = document.getElementsByTagName('video');
+          for (var i = 0; i < vids.length; i++) vids[i].pause();
+        })();
+      """);
     }
   }
 
@@ -136,8 +143,14 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> with WindowLi
     if (mounted && _isWindows) {
       setState(() {
         _isMinimized = false;
-        _winLoading = true;
       });
+      // Try to resume video playback when restored
+      _winController?.evaluateJavascript(source: """
+        (function() {
+          var vids = document.getElementsByTagName('video');
+          for (var i = 0; i < vids.length; i++) vids[i].play();
+        })();
+      """);
     }
   }
 
@@ -250,12 +263,11 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> with WindowLi
           onHover: (_) => _onMouseMoved(),
           child: Stack(
             children: [
-            if (!_isMinimized)
               InAppWebView(
-                webViewEnvironment: _webViewEnvironment,
-                initialUrlRequest: URLRequest(
-                  url: WebUri("https://www.youtube.com/embed/${widget.youtubeKey}?autoplay=1"),
-                ),
+                  webViewEnvironment: _webViewEnvironment,
+                  initialUrlRequest: URLRequest(
+                    url: WebUri("https://www.youtube.com/embed/${widget.youtubeKey}?autoplay=1"),
+                  ),
                 initialSettings: InAppWebViewSettings(
                   transparentBackground: false, // Prevents freeze during full-screen resize
                   mediaPlaybackRequiresUserGesture: false,

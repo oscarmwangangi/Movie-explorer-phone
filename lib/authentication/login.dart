@@ -83,7 +83,9 @@ class _LoginScreenState extends State<LoginScreen> {
       await prefs.remove('remembered_password');
     }
 
-    Navigator.pushReplacementNamed(context, HomeScreen.id);
+    if (context.mounted) {
+      Navigator.pushReplacementNamed(context, HomeScreen.id);
+    }
   }
 
   @override
@@ -178,6 +180,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       controller: emailController,
                       hintText: "Email",
                       icon: Icons.email_outlined,
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
                     ),
 
                     const SizedBox(height: 24),
@@ -188,6 +192,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       hintText: "Password",
                       icon: Icons.lock_outline,
                       obscureText: obscureText,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _handleLogin(),
                       suffixIcon: obscureText ? Icons.visibility_off : Icons.visibility,
                       onSuffixTap: () {
                         setState(() {
