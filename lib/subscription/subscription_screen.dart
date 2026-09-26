@@ -47,7 +47,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> with WidgetsBin
     setState(() => isLoading = true);
     try {
       final sub = await ApiService.getMySubscription();
-      final status = sub['status'];
+      final status = sub['status']?.toString();
       _currentStatus = status;
 
       if (status == 'active') {

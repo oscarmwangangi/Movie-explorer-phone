@@ -38,7 +38,7 @@ class _SubscriptionGateState extends State<SubscriptionGate> {
 
       // The backend returns a JSON object. We check the 'status' field.
       // Expected statuses: 'active', 'pending', 'expired', 'cancelled'.
-      final status = subscription['status'];
+      final status = subscription['status']?.toString();
 
       if (status == 'active') {
         if (mounted) {

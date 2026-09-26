@@ -183,10 +183,11 @@ class ApiService {
       final data = jsonDecode(response.body);
 
       if (response.statusCode != 200) {
-        throw Exception(data['error'] ?? 'Failed to check subscription');
+        final errorMessage = (data is Map) ? data['error'] : null;
+        throw Exception(errorMessage ?? 'Failed to check subscription');
       }
 
-      return data;
+      return (data is Map) ? Map<String, dynamic>.from(data) : {};
     } catch (e) {
       debugPrint("GetSubscription Error: $e");
       throw Exception('Network error while checking subscription');
