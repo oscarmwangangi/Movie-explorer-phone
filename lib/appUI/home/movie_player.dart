@@ -7,13 +7,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:movie_explorer/theme/app_colors.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:webview_flutter/webview_flutter.dart' hide WebResourceResponse;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:movie_explorer/main.dart';
 import 'package:movie_explorer/appUI/services/watch_history_service.dart';
 import 'package:movie_explorer/appUI/services/tmdb_service.dart';
 import 'package:movie_explorer/appUI/home/movie_details.dart';
+
+// NOTE: webview_flutter is no longer used in this file.
+// We now use flutter_inappwebview on Windows, Android and iOS, because it
+// can inject our ad-cleaning script into EVERY iframe (ads live in iframes).
+
+// ---------------------------------------------------------------------------
+// Streaming servers
+// ---------------------------------------------------------------------------
 
 class ServerOption {
   final String name;
@@ -29,41 +36,73 @@ class ServerOption {
 
 final List<ServerOption> kServerOptions = [
   const ServerOption(
-    name: 'VidLink (Ad-Free)',
-    movieUrl: 'https://vidlink.pro/movie',
-    tvUrl: 'https://vidlink.pro/tv',
-  ),
-  const ServerOption(
-    name: 'VidSrc.cc',
-    movieUrl: 'https://vidsrc.cc/v2/embed/movie',
-    tvUrl: 'https://vidsrc.cc/v2/embed/tv',
-  ),
-  const ServerOption(
-    name: 'Embed.su',
-    movieUrl: 'https://embed.su/embed/movie',
-    tvUrl: 'https://embed.su/embed/tv',
-  ),
-  const ServerOption(
-    name: 'AutoEmbed',
-    movieUrl: 'https://player.autoembed.cc/embed/movie',
-    tvUrl: 'https://player.autoembed.cc/embed/tv',
-  ),
-  const ServerOption(
-    name: 'VidSrc.me',
-    movieUrl: 'https://vidsrc.me/embed/movie',
-    tvUrl: 'https://vidsrc.me/embed/tv',
-  ),
-  const ServerOption(
-    name: 'VidSrc.to',
+    name: 'Server 1',
     movieUrl: 'https://vidsrc.to/embed/movie',
     tvUrl: 'https://vidsrc.to/embed/tv',
   ),
   const ServerOption(
-    name: '2Embed',
-    movieUrl: 'https://www.2embed.cc/embed',
-    tvUrl: 'https://www.2embed.cc/embedtv',
+    name: 'Server 2',
+    movieUrl: 'https://vidsrc.me/embed/movie',
+    tvUrl: 'https://vidsrc.me/embed/tv',
+  ),
+  // const ServerOption(
+  //   name: 'Embed.su (Fast HD)',
+  //   movieUrl: 'https://embed.su/embed/movie',
+  //   tvUrl: 'https://embed.su/embed/tv',
+  // ),
+  // const ServerOption(
+  //   name: 'AutoEmbed (Fast HD)',
+  //   movieUrl: 'https://player.autoembed.cc/embed/movie',
+  //   tvUrl: 'https://player.autoembed.cc/embed/tv',
+  // ),
+  // const ServerOption(
+  //   name: 'VidSrc.cc (HD)',
+  //   movieUrl: 'https://vidsrc.cc/v2/embed/movie',
+  //   tvUrl: 'https://vidsrc.cc/v2/embed/tv',
+  // ),
+  const ServerOption(
+    name: 'Server 3 (Ad-Free) HD',
+    movieUrl: 'https://vidlink.pro/movie',
+    tvUrl: 'https://vidlink.pro/tv',
   ),
 ];
+
+// ---------------------------------------------------------------------------
+// Ad blocking lists (shared by every platform)
+// ---------------------------------------------------------------------------
+
+// Names of known ad networks / betting sites. If a URL contains any of these,
+// we block it.
+// I removed very short words like "win", "lead", "track" and "ad." because
+// they also match normal URLs and could break the real player.
+const List<String> kAdNetworkKeywords = [
+  "adsterra", "monetag", "alwingulla", "propeller", "exoclick",
+  "juicyads", "hilltopads", "syndication", "doubleclick", "popunder",
+  "popads", "popcash", "highrevenuegate", "profitcpm", "onclickads",
+  "clickadilla", "trafficjunky", "zedo", "outbrain", "taboola",
+  "bet365", "1xbet", "casino",
+];
+
+// URL paths that are almost always ads / popups.
+const List<String> kAdUrlPaths = [
+  "/popup", "/popunder", "/ads/", "/ad/", "/clk", "/out/",
+];
+
+// Domains the player is allowed to load from.
+// If a server stops working on your phone, check the debug console for a
+// "Blocking ..." message and add that domain here.
+const List<String> kAllowedDomains = [
+  "vidsrc", "vsembed", "2embed", "autoembed", "vidplay",
+  "megacloud", "vizcloud", "rabbitstream", "cloudnest",
+  "cloudorchestranova", "orchestranova", "shadowland",
+  "movie-api", "mcloud", "filemoon", "streamtape", "embed.su", "embedsu",
+  "vidlink", "superstream", "google.com", "gstatic.com", "cloudflare",
+  "hcaptcha", "recaptcha", "smashystream", "vidsrc.cc", "vidsrc.icu",
+];
+
+// ---------------------------------------------------------------------------
+// The screen
+// ---------------------------------------------------------------------------
 
 class MoviePlayerScreen extends StatefulWidget {
   final int tmdbId;
@@ -94,12 +133,13 @@ class MoviePlayerScreen extends StatefulWidget {
 }
 
 class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListener {
-  // Mobile/macOS path (webview_flutter has native platform support there).
-  WebViewController? _controller;
-
-  // Windows path — flutter_inappwebview handles the WebView2 environment
+  // The webview controller. Used on Windows, Android and iOS.
+  // (The variable is still called _winController to keep the diff small.)
   InAppWebViewController? _winController;
+
+  // Only Windows needs this (WebView2 environment). It stays null on mobile.
   WebViewEnvironment? _webViewEnvironment;
+
   bool _winInitFailed = false;
   bool _hasLoadedOnce = false;
   bool _isFullScreen = false;
@@ -125,8 +165,27 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
 
   final FocusNode _windowsFocusNode = FocusNode();
 
-  static const String _cleanupScript = """
+  // Pretend to be a phone browser so the players show their mobile layout.
+  String get _userAgent {
+    if (!kIsWeb && Platform.isIOS) {
+      return "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+    }
+    return "Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
+  }
+
+  // JavaScript that is injected into the player page AND all of its iframes.
+  // It removes popups, fake "missed video call" boxes and ad links.
+  // It is a raw string (r"""...""") so Dart does not touch $ signs inside it.
+  static const String _cleanupScript = r"""
     (function() {
+      if (window.__cleanupInstalled) {
+        if (typeof window.purgeLoadersAndAds === 'function') {
+          window.purgeLoadersAndAds();
+        }
+        return;
+      }
+      window.__cleanupInstalled = true;
+
       // 1. Mock window proxy to trick popup detection scripts
       var dummyWindow = {
         closed: false,
@@ -164,6 +223,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       }
 
       function disablePopups(win) {
+        if (!win) return;
         try {
           try {
             Object.defineProperty(win, 'open', { value: fakeWindowOpen, writable: false, configurable: false });
@@ -181,9 +241,58 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
             Object.defineProperty(win, 'prompt', { value: function() { return null; }, writable: false, configurable: false });
           } catch(e) { win.prompt = function() { return null; }; }
         } catch(e) {}
+
+        try {
+          for (var i = 0; i < win.frames.length; i++) {
+            disablePopups(win.frames[i]);
+          }
+        } catch(e) {}
       }
 
       disablePopups(window);
+
+      // Prevent Page Visibility API & blur events from freezing video playback on window resize/fullscreen
+      try {
+        Object.defineProperty(document, 'hidden', {
+          get: function() { return false; },
+          configurable: true
+        });
+        Object.defineProperty(document, 'visibilityState', {
+          get: function() { return 'visible'; },
+          configurable: true
+        });
+      } catch(e) {}
+
+      try {
+        var suppressVisibilityEvent = function(e) {
+          if (e && (e.type === 'visibilitychange' || e.type === 'webkitvisibilitychange')) {
+            e.stopImmediatePropagation();
+          }
+        };
+        window.addEventListener('visibilitychange', suppressVisibilityEvent, true);
+        window.addEventListener('webkitvisibilitychange', suppressVisibilityEvent, true);
+      } catch(e) {}
+
+      function wakeAndResumeVideo() {
+        try {
+          var vids = document.querySelectorAll('video');
+          for (var i = 0; i < vids.length; i++) {
+            var v = vids[i];
+            if (v) {
+              if (v.paused && v.currentTime > 0 && !v.ended) {
+                v.play().catch(function(){});
+              }
+              var oldTransform = v.style.transform;
+              v.style.transform = 'translateZ(0)';
+              setTimeout(function() { v.style.transform = oldTransform || ''; }, 50);
+            }
+          }
+        } catch(e) {}
+        try {
+          window.dispatchEvent(new Event('resize'));
+        } catch(e) {}
+      }
+      window.wakeAndResumeVideo = wakeAndResumeVideo;
 
       // 2. Prevent iframes from redirecting top window
       try {
@@ -214,8 +323,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       } catch(e) {}
 
       // 3. Intercept dynamic script tag creation for ad networks
+      var adDomains = ['alwingulla', 'adsterra', 'monetag', 'propeller', 'exoclick', 'juicyads', 'hilltopads', 'popunder', 'syndication', 'highrevenuegate', 'profitcpm', 'disable-devtool', 'clickadilla', 'onclickads', 'popads', 'popcash', 'elina', 'fakecall'];
       try {
-        var adDomains = ['alwingulla', 'adsterra', 'monetag', 'propeller', 'exoclick', 'juicyads', 'hilltopads', 'popunder', 'syndication', 'highrevenuegate', 'profitcpm'];
         var origCreateElement = Document.prototype.createElement;
         Document.prototype.createElement = function(tagName) {
           var el = origCreateElement.apply(this, arguments);
@@ -237,19 +346,38 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
 
       function isAllowedUrl(href) {
         var h = (href || '').toLowerCase();
-        return h.includes('vidlink') || h.includes('vidsrc') || h.includes('vsembed') || 
-               h.includes('2embed') || h.includes('autoembed') || h.includes('vidplay') || 
-               h.includes('megacloud') || h.includes('embed.su') || h.includes('google') || 
-               h.includes('cloudflare') || h.startsWith('/') || h.startsWith('#') || h === '';
+        if (h.includes('/pop') || h.includes('/ad') || h.includes('/clk') || h.includes('/out/') || h.includes('redirect') || h.includes('/promo') || h.includes('/click') || h.includes('adsterra') || h.includes('monetag')) {
+          return false;
+        }
+        return h.includes('vidlink') || h.includes('vidsrc') || h.includes('vsembed') ||
+               h.includes('2embed') || h.includes('autoembed') || h.includes('vidplay') ||
+               h.includes('megacloud') || h.includes('embed.su') || h.includes('embedsu') ||
+               h.includes('cloudorchestranova') || h.includes('orchestranova') ||
+               h.includes('cloudnest') || h.includes('shadowland') || h.includes('vizcloud') ||
+               h.includes('rabbitstream') || h.includes('movie-api') || h.includes('mcloud') ||
+               h.includes('filemoon') || h.includes('streamtape') || h.includes('superstream') ||
+               h.includes('google') || h.includes('cloudflare') || h.includes('smashystream') ||
+               h.startsWith('/') || h.startsWith('#') || h === '';
       }
 
+      // Hide common ad containers with CSS.
       function injectAdBlockStyles() {
+        try {
+          var vp = document.querySelector('meta[name="viewport"]');
+          if (!vp) {
+            vp = document.createElement('meta');
+            vp.name = 'viewport';
+            (document.head || document.documentElement).appendChild(vp);
+          }
+          vp.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
+        } catch(e) {}
+
         try {
           if (document.getElementById('app-loader-override-style')) return;
           var style = document.createElement('style');
           style.id = 'app-loader-override-style';
           style.innerHTML = `
-            html, body {
+            html, body, #app, #root, div[id*="player"], div[class*="player"], div[class*="vidlink"] {
               width: 100% !important;
               height: 100% !important;
               margin: 0 !important;
@@ -257,9 +385,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
               overflow: hidden !important;
               background-color: #000 !important;
               -webkit-tap-highlight-color: transparent !important;
+              box-sizing: border-box !important;
             }
 
-            video {
+            video, .vjs-tech, .jw-video, .plyr__video-wrapper {
               width: 100% !important;
               height: 100% !important;
               max-width: 100% !important;
@@ -267,15 +396,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
               object-fit: contain !important;
             }
 
-            .loading, .spinner, #loading, #spinner,
-            .loading-pulse, .pulse, .pulse-loader, .pulse-ring, .circle-pulse,
-            .vjs-loading-spinner, .jw-spinner, .plyr__spinner,
-            .player-loading, #player-loading, .loading-container, .loading-overlay, #player_overlay,
-            div[class*="loading"], div[class*="spinner"], div[class*="pulse"], div[class*="loader"],
-            div[id*="ad"], div[class*="ad-"], div[class*="ad_"], div[class*="ads"], div[class*="banner"],
-            iframe[src*="ad"], iframe[src*="doubleclick"], iframe[src*="pop"], iframe[src*="bet"],
+            div[id^="ad-"], div[id^="ad_"], div[id="ad"], div[id="ads"],
+            div[class~="ad"], div[class~="ads"], div[class^="ad-"], div[class^="ad_"],
+            .adsbygoogle,
+            iframe[src*="doubleclick"], iframe[src*="adsterra"], iframe[src*="monetag"], iframe[src*="/ads/"],
             #pop, .popunder, .popup, #popup, div[class*="popunder"], div[class*="popup"],
-            a[target="_blank"][href*="http"] {
+            div[class*="fake-call"], div[class*="pop-call"], div[class*="elina"],
+            div[class*="missed-call"], div[class*="avatar-popup"], div[class*="toast-call"],
+            [id*="fake-call"], [id*="pop-call"], [id*="elina"], [class*="video-call"],
+            a[target="_blank"] {
               display: none !important;
               visibility: hidden !important;
               opacity: 0 !important;
@@ -286,11 +415,85 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         } catch(e) {}
       }
 
+      function isFakeCallText(text) {
+        if (!text) return false;
+        var t = text.toLowerCase();
+        var phrases = [
+          'missed video call', 'missed video calls', 'missed call', 'missed calls',
+          'join the video call', 'incoming call', 'has something to show',
+          'show to you', 'live cam', 'chat with', 'elina', 'video call',
+          'video calls', 'call from', 'wants to chat', 'private show', 'missed'
+        ];
+        for (var i = 0; i < phrases.length; i++) {
+          if (t.includes(phrases[i])) return true;
+        }
+        return false;
+      }
+
+      // Finds and removes fake video call / chat popup badges and floating overlays
+      function removeFakeCallPopups() {
+        try {
+          if (!document.body) return;
+
+          function scanAndPurge(root) {
+            if (!root) return;
+            var elems = root.querySelectorAll('div, a, section, span, p, aside, header');
+            for (var i = 0; i < elems.length; i++) {
+              var el = elems[i];
+              var txt = (el.innerText || el.textContent || '').toLowerCase();
+              if (!txt || !isFakeCallText(txt)) continue;
+
+              // Walk up to find the topmost floating container box below body that doesn't contain the video
+              var box = el;
+              var topBox = el;
+              while (box && box !== document.body && box !== document.documentElement) {
+                if (box.querySelector && (box.querySelector('video') || box.querySelector('iframe[src*="vid"]') || box.querySelector('iframe[src*="embed"]'))) {
+                  break;
+                }
+                topBox = box;
+                box = box.parentElement;
+              }
+
+              if (topBox && topBox !== document.body && topBox !== document.documentElement) {
+                if (!topBox.querySelector('video')) {
+                  topBox.style.setProperty('display', 'none', 'important');
+                  topBox.style.setProperty('visibility', 'hidden', 'important');
+                  topBox.style.setProperty('pointer-events', 'none', 'important');
+                  topBox.style.setProperty('opacity', '0', 'important');
+                  topBox.style.setProperty('position', 'absolute', 'important');
+                  topBox.style.setProperty('top', '-9999px', 'important');
+                  try { topBox.remove(); } catch(e) {}
+                }
+              }
+            }
+          }
+
+          scanAndPurge(document);
+
+          var allNodes = document.querySelectorAll('*');
+          for (var j = 0; j < allNodes.length; j++) {
+            if (allNodes[j].shadowRoot) {
+              scanAndPurge(allNodes[j].shadowRoot);
+            }
+          }
+        } catch(e) {}
+      }
+
       function removeFloatingAdOverlays() {
         try {
-          var elems = document.querySelectorAll('body > div, body > aside, body > section');
+          var elems = document.querySelectorAll('body > div, body > aside, body > section, div[style*="z-index"], a[target="_blank"]');
           for (var i = 0; i < elems.length; i++) {
             var el = elems[i];
+
+            if (el.tagName === 'A' && el.getAttribute('target') === '_blank') {
+              var href = (el.getAttribute('href') || '').toLowerCase();
+              if (!isAllowedUrl(href)) {
+                el.style.setProperty('display', 'none', 'important');
+                el.style.setProperty('pointer-events', 'none', 'important');
+                el.removeAttribute('target');
+                el.setAttribute('href', 'javascript:void(0)');
+              }
+            }
 
             // Protect video player and controls from being removed
             var hasMedia = el.querySelector('video, iframe[src*="embed"], iframe[src*="vid"], canvas');
@@ -299,15 +502,27 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
             var isControls = el.querySelector('button, input, [class*="control"], [class*="player"], [class*="vidlink"], [class*="vjs"], [class*="jw"], [class*="plyr"]');
             if (isControls) continue;
 
-            var text = (el.textContent || '').toLowerCase();
-            if (text.includes('missed video call') || text.includes('missed call') || 
-                text.includes('has something to show') || text.includes('video call') ||
-                text.includes('elina') || text.includes('incoming call') ||
-                text.includes('new message') || text.includes('show to you') || 
-                text.includes('chat with') || text.includes('live cam')) {
+            var txt = (el.innerText || el.textContent || '').toLowerCase();
+            if (isFakeCallText(txt)) {
               el.style.setProperty('display', 'none', 'important');
               el.style.setProperty('pointer-events', 'none', 'important');
-              el.remove();
+              try { el.remove(); } catch(e) {}
+              continue;
+            }
+
+            var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+            if (style) {
+              var zIndex = parseInt(style.zIndex, 10);
+              var pos = style.position;
+              if ((pos === 'fixed' || pos === 'absolute') && (zIndex >= 10 || isNaN(zIndex))) {
+                var containsAdLink = el.querySelector('a[target="_blank"]');
+                var containsAdKeyword = adDomains.some(function(kw) { return txt.includes(kw); });
+                if (containsAdLink || containsAdKeyword) {
+                  el.style.setProperty('display', 'none', 'important');
+                  el.style.setProperty('pointer-events', 'none', 'important');
+                  try { el.remove(); } catch(e) {}
+                }
+              }
             }
           }
         } catch(e) {}
@@ -317,19 +532,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         if (!node || !node.tagName) return;
         try {
           var tag = node.tagName.toUpperCase();
-
-          var text = (node.textContent || '').toLowerCase();
-          if (text.includes('missed video call') || text.includes('missed call') || 
-              text.includes('has something to show') || text.includes('video call') ||
-              text.includes('elina') || text.includes('incoming call') ||
-              text.includes('new message') || text.includes('show to you') || 
-              text.includes('chat with') || text.includes('live cam')) {
-            node.style.setProperty('display', 'none', 'important');
-            node.style.setProperty('visibility', 'hidden', 'important');
-            node.style.setProperty('pointer-events', 'none', 'important');
-            node.remove();
-            return;
-          }
 
           if (tag === 'A') {
             var href = (node.getAttribute('href') || '').toLowerCase();
@@ -364,75 +566,93 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         disablePopups(window);
         injectAdBlockStyles();
         removeFloatingAdOverlays();
+        removeFakeCallPopups();
 
         try {
-          var links = document.querySelectorAll('a[target="_blank"], iframe[src*="ad"]');
+          var links = document.querySelectorAll('a[target="_blank"], iframe[src*="/ads/"], iframe[src*="adsterra"], iframe[src*="monetag"]');
           for (var i = 0; i < links.length; i++) {
             purgeDomNode(links[i]);
           }
         } catch(e) {}
       }
 
-      // Capture phase listener
+      window.purgeLoadersAndAds = purgeLoadersAndAds;
+
+      // Capture phase listeners for clicks and touch events
       try {
-        if (!window._adClickBlockerSet) {
-          window._adClickBlockerSet = true;
-          window.addEventListener('click', function(e) {
-            disablePopups(window);
-            removeFloatingAdOverlays();
-            var target = e.target;
-            while (target && target !== document.body) {
-              if (target.tagName === 'A') {
-                var href = (target.getAttribute('href') || '').toLowerCase();
-                var isTargetBlank = target.getAttribute('target') === '_blank';
-                if ((isTargetBlank || href.includes('ad') || href.includes('pop') || href.includes('click')) && !isAllowedUrl(href)) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  e.stopImmediatePropagation();
-                  return false;
-                }
+        var eventsToBlock = ['click', 'touchstart', 'touchend', 'pointerdown', 'mousedown'];
+        var handleInteraction = function(e) {
+          disablePopups(window);
+          purgeLoadersAndAds();
+          var target = e.target;
+          while (target && target !== document.body && target !== document.documentElement) {
+            if (target.tagName === 'A') {
+              var href = (target.getAttribute('href') || '').toLowerCase();
+              var isTargetBlank = target.getAttribute('target') === '_blank';
+              if (isTargetBlank || !isAllowedUrl(href)) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                if (target.getAttribute('target')) target.removeAttribute('target');
+                if (href.startsWith('http')) target.setAttribute('href', 'javascript:void(0)');
+                return false;
               }
-              target = target.parentElement;
             }
-          }, true);
-        }
+            target = target.parentElement;
+          }
+        };
+
+        eventsToBlock.forEach(function(evt) {
+          window.addEventListener(evt, handleInteraction, true);
+        });
       } catch(e) {}
 
       // Override HTMLAnchorElement.prototype.click
       try {
-        if (!window._anchorClickOverridden) {
-          window._anchorClickOverridden = true;
-          var originalClick = HTMLAnchorElement.prototype.click;
-          HTMLAnchorElement.prototype.click = function() {
-            var href = (this.getAttribute('href') || '').toLowerCase();
-            var target = this.getAttribute('target');
-            if (target === '_blank' || !isAllowedUrl(href)) {
-              return;
-            }
-            return originalClick.apply(this, arguments);
-          };
-        }
+        var originalClick = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function() {
+          var href = (this.getAttribute('href') || '').toLowerCase();
+          var target = this.getAttribute('target');
+          if (target === '_blank' || !isAllowedUrl(href)) {
+            return;
+          }
+          return originalClick.apply(this, arguments);
+        };
       } catch(e) {}
 
       injectAdBlockStyles();
       purgeLoadersAndAds();
 
-      if (!window._loaderIntervalSet) {
-        window._loaderIntervalSet = true;
-        setInterval(purgeLoadersAndAds, 100);
+      // Run cleaning fast whenever page changes
+      var _purgeTimeout = null;
+      function schedulePurge() {
+        if (_purgeTimeout) return;
+        _purgeTimeout = setTimeout(function() {
+          _purgeTimeout = null;
+          purgeLoadersAndAds();
+        }, 200);
       }
 
+      // Fast periodic scan every 500ms
+      setInterval(purgeLoadersAndAds, 500);
+
       try {
-        if (!window._observerSet) {
-          window._observerSet = true;
-          var observer = new MutationObserver(function() {
-            purgeLoadersAndAds();
-          });
-          observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
-        }
+        var observer = new MutationObserver(function(mutations) {
+          for (var i = 0; i < mutations.length; i++) {
+            if (mutations[i].addedNodes && mutations[i].addedNodes.length > 0) {
+              schedulePurge();
+              break;
+            }
+          }
+        });
+        observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
       } catch(e) {}
     })();
   """;
+
+  // -------------------------------------------------------------------------
+  // Setup / teardown
+  // -------------------------------------------------------------------------
 
   @override
   void initState() {
@@ -460,124 +680,32 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
 
     if (_isWindows) {
       _initWindowsWebview();
-      return;
-    }
-
-    if (_isLinux) {
+    } else if (_isLinux) {
+      // Linux has no in-app player, we show a "Watch in browser" button.
       isLoading = false;
-      return;
     }
-
-    final String userAgent = !kIsWeb && Platform.isIOS
-        ? "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-        : "Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
-
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.black)
-      ..setUserAgent(userAgent)
-      ..addJavaScriptChannel(
-        'ControlChannel',
-        onMessageReceived: (message) {
-          if (message.message == 'toggleControls') {
-            _toggleControls();
-          }
-        },
-      )
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (int progress) {
-            if (mounted) {
-              setState(() {
-                loadingProgress = progress / 100;
-                if (progress > 80) {
-                  isLoading = false;
-                  _hasLoadedOnce = true;
-                  _mobileSafetyTimer?.cancel();
-                }
-              });
-              if (progress > 10) {
-                _controller?.runJavaScript(_cleanupScript);
-              }
-            }
-          },
-          onPageStarted: (String url) {
-            if (mounted) {
-              if (!_hasLoadedOnce) {
-                setState(() => isLoading = true);
-              }
-              _mobileSafetyTimer?.cancel();
-              _mobileSafetyTimer = Timer(const Duration(seconds: 15), () {
-                if (mounted && isLoading) {
-                  setState(() => isLoading = false);
-                }
-              });
-            }
-            _controller?.runJavaScript(_cleanupScript);
-          },
-          onPageFinished: (String url) {
-            if (mounted) {
-              setState(() {
-                isLoading = false;
-                _hasLoadedOnce = true;
-              });
-              _mobileSafetyTimer?.cancel();
-            }
-            _controller?.runJavaScript(_cleanupScript);
-          },
-          onNavigationRequest: (NavigationRequest request) {
-            final String url = request.url.toLowerCase();
-
-            final adKeywords = [
-              "adsterra", "monetag", "alwingulla", "propeller", "exoclick",
-              "juicyads", "hilltopads", "syndication", "doubleclick",
-              "bet365", "1xbet", "casino", "popunder", "popup",
-              "click.", "redirect", "traffic", "zedo", "outbrain", "taboola",
-              "ad.", "ads.", "banner", "pop.", "track", "analytic", "clicker",
-              "onclick", "creative", "affiliate", "promo", "lead", "spin", "win",
-              "gift", "bonus", "betting", "poker", "slot", "highrevenuegate",
-              "profitcpm", "onclickads"
-            ];
-            if (adKeywords.any((kw) => url.contains(kw))) {
-              debugPrint("Blocked explicit ad URL: $url");
-              return NavigationDecision.prevent;
-            }
-
-            final playerUri = Uri.tryParse(_playerUrl);
-            final playerHost = playerUri?.host.toLowerCase();
-
-            // Protection against post-load main frame redirects
-            if (_hasLoadedOnce) {
-              final reqUri = Uri.tryParse(url);
-              final reqHost = reqUri?.host.toLowerCase();
-              if (playerHost != null && reqHost != null && playerHost != reqHost && !url.contains(widget.tmdbId.toString())) {
-                debugPrint("Blocked post-load main frame redirect to: $url");
-                return NavigationDecision.prevent;
-              }
-            }
-
-            final allowedDomains = [
-              "vidsrc", "vsembed", "2embed", "autoembed", "vidplay",
-              "megacloud", "vizcloud", "rabbitstream", "cloudnest",
-              "movie-api", "mcloud", "filemoon", "streamtape", "embed.su",
-              "vidlink", "superstream", "google.com", "gstatic.com", "cloudflare",
-              "hcaptcha", "recaptcha"
-            ];
-
-            bool isAllowed = allowedDomains.any((domain) => url.contains(domain)) ||
-                (playerHost != null && playerHost.isNotEmpty && url.contains(playerHost));
-
-            if (isAllowed || url == _playerUrl.toLowerCase()) {
-              return NavigationDecision.navigate;
-            }
-
-            debugPrint("Blocked navigation to: $url");
-            return NavigationDecision.prevent;
-          },
-        ),
-      )
-      ..loadRequest(Uri.parse(_playerUrl));
+    // On Android / iOS there is nothing to set up here.
+    // The InAppWebView widget creates itself in build().
   }
+
+  @override
+  void dispose() {
+    if (_isWindows) {
+      windowManager.removeListener(this);
+    }
+    _hideTimer?.cancel();
+    _mobileSafetyTimer?.cancel();
+    _windowsFocusNode.dispose();
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    super.dispose();
+  }
+
+  // -------------------------------------------------------------------------
+  // Player URL + loading
+  // -------------------------------------------------------------------------
 
   void _updatePlayerUrl() {
     final server = kServerOptions[_selectedServerIndex];
@@ -601,6 +729,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
     });
   }
 
+  // Reload the webview with the current _playerUrl.
+  // (Replaces the old "if windows ... else ..." code that was repeated.)
+  void _loadPlayerUrl() {
+    _winController?.loadUrl(urlRequest: URLRequest(url: WebUri(_playerUrl)));
+  }
+
   void _changeServer(int index) {
     if (index == _selectedServerIndex) return;
     setState(() {
@@ -609,11 +743,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       _hasLoadedOnce = false;
     });
     _updatePlayerUrl();
-    if (_isWindows) {
-      _winController?.loadUrl(urlRequest: URLRequest(url: WebUri(_playerUrl)));
-    } else {
-      _controller?.loadRequest(Uri.parse(_playerUrl));
-    }
+    _loadPlayerUrl();
   }
 
   void _recordWatch() {
@@ -673,11 +803,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
     });
     _updatePlayerUrl();
     _recordWatch();
-    if (_isWindows) {
-      _winController?.loadUrl(urlRequest: URLRequest(url: WebUri(_playerUrl)));
-    } else {
-      _controller?.loadRequest(Uri.parse(_playerUrl));
-    }
+    _loadPlayerUrl();
   }
 
   void _changeSeason(int? newSeason) async {
@@ -694,11 +820,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
     if (mounted) setState(() => _isLoadingTVData = false);
     _updatePlayerUrl();
     _recordWatch();
-    if (_isWindows) {
-      _winController?.loadUrl(urlRequest: URLRequest(url: WebUri(_playerUrl)));
-    } else {
-      _controller?.loadRequest(Uri.parse(_playerUrl));
-    }
+    _loadPlayerUrl();
   }
 
   Future<void> _initWindowsWebview() async {
@@ -746,19 +868,68 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
-  @override
-  void dispose() {
-    if (_isWindows) {
-      windowManager.removeListener(this);
+  // -------------------------------------------------------------------------
+  // Ad blocking helpers
+  // -------------------------------------------------------------------------
+
+  // True if the URL looks like an ad or popup.
+  bool _looksLikeAd(String url) {
+    final lower = url.toLowerCase();
+
+    if (kAdNetworkKeywords.any((word) => lower.contains(word))) return true;
+    if (kAdUrlPaths.any((path) => lower.contains(path))) return true;
+
+    // Special case: popups coming from vidsrc
+    if (lower.contains("vidsrc") &&
+        (lower.contains("/pop") || lower.contains("/out/") || lower.contains("/ad"))) {
+      return true;
     }
-    _hideTimer?.cancel();
-    _mobileSafetyTimer?.cancel();
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-    ]);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    super.dispose();
+    return false;
   }
+
+  // Decides if a URL is allowed to load.
+  // [isMainFrame] is true for the top page, false for iframes.
+  bool _shouldAllowUrl(String url, {required bool isMainFrame}) {
+    final lower = url.toLowerCase();
+
+    // Empty iframes are fine
+    if (lower.startsWith("about:blank")) return true;
+
+    // 1. Block anything that looks like an ad
+    if (_looksLikeAd(lower)) {
+      debugPrint("Blocking ad URL: $lower");
+      return false;
+    }
+
+    final playerHost = Uri.tryParse(_playerUrl)?.host.toLowerCase();
+
+    // 2. After the player has loaded, the main page must not jump to another site
+    if (isMainFrame && _hasLoadedOnce) {
+      final requestHost = Uri.tryParse(lower)?.host.toLowerCase();
+      if (playerHost != null &&
+          requestHost != null &&
+          playerHost != requestHost &&
+          !lower.contains(widget.tmdbId.toString())) {
+        debugPrint("Blocking post-load redirect to: $lower");
+        return false;
+      }
+    }
+
+    // 3. Only allow known video domains (or the current player's own host)
+    final isAllowedDomain = kAllowedDomains.any((domain) => lower.contains(domain)) ||
+        (playerHost != null && playerHost.isNotEmpty && lower.contains(playerHost));
+
+    if (isAllowedDomain || lower == _playerUrl.toLowerCase()) {
+      return true;
+    }
+
+    debugPrint("Blocking navigation to: $lower");
+    return false;
+  }
+
+  // -------------------------------------------------------------------------
+  // Windows only: pause / play when the window is minimized / restored
+  // -------------------------------------------------------------------------
 
   @override
   void onWindowMinimize() {
@@ -798,23 +969,33 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
 
   void _triggerWebViewResize() {
     if (!_isWindows || _winController == null) return;
-    const jsResize = """
+    const jsWakeup = """
       (function() {
-        window.dispatchEvent(new Event('resize'));
-        var vids = document.getElementsByTagName('video');
-        for (var i = 0; i < vids.length; i++) {
-          if (vids[i].paused === false) {
-            var ct = vids[i].currentTime;
+        try {
+          if (typeof window.wakeAndResumeVideo === 'function') {
+            window.wakeAndResumeVideo();
+          } else {
+            window.dispatchEvent(new Event('resize'));
+            var vids = document.getElementsByTagName('video');
+            for (var i = 0; i < vids.length; i++) {
+              if (vids[i].paused && vids[i].currentTime > 0) vids[i].play();
+            }
           }
-        }
+        } catch(e) {}
       })();
     """;
-    _winController?.evaluateJavascript(source: jsResize);
+    _winController?.evaluateJavascript(source: jsWakeup);
+    Future.delayed(const Duration(milliseconds: 50), () {
+      if (mounted) _winController?.evaluateJavascript(source: jsWakeup);
+    });
     Future.delayed(const Duration(milliseconds: 150), () {
-      if (mounted) _winController?.evaluateJavascript(source: jsResize);
+      if (mounted) _winController?.evaluateJavascript(source: jsWakeup);
     });
     Future.delayed(const Duration(milliseconds: 350), () {
-      if (mounted) _winController?.evaluateJavascript(source: jsResize);
+      if (mounted) _winController?.evaluateJavascript(source: jsWakeup);
+    });
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) _winController?.evaluateJavascript(source: jsWakeup);
     });
   }
 
@@ -831,8 +1012,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
           _showControls = true;
         }
       });
-      _windowsFocusNode.requestFocus();
       _triggerWebViewResize();
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) _windowsFocusNode.requestFocus();
+      });
     }
   }
 
@@ -844,8 +1027,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
           _isFullScreen = false;
           _showControls = true;
         });
-        _windowsFocusNode.requestFocus();
         _triggerWebViewResize();
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted) _windowsFocusNode.requestFocus();
+        });
       }
     }
   }
@@ -868,17 +1053,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
     }
   }
 
-  void _toggleControls() {
-    if (mounted) {
-      setState(() {
-        _showControls = !_showControls;
-        if (_showControls) {
-          _startHideTimer();
-        }
-      });
-    }
-  }
-
   void _showInfo() {
     Navigator.push(
       context,
@@ -895,6 +1069,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       ),
     );
   }
+
+  // -------------------------------------------------------------------------
+  // Bottom sheets
+  // -------------------------------------------------------------------------
 
   void _showServerPicker() {
     showModalBottomSheet(
@@ -1051,6 +1229,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
     );
   }
 
+  // -------------------------------------------------------------------------
+  // UI pieces
+  // -------------------------------------------------------------------------
+
   Widget _buildMobileControls() {
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 300),
@@ -1166,12 +1348,170 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
     );
   }
 
+  // The black "Loading stream..." screen shown on top of the webview.
+  Widget _buildLoadingOverlay() {
+    return Container(
+      color: Colors.black,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              value: loadingProgress > 0 ? loadingProgress : null,
+              strokeWidth: 3,
+              color: AppColors.accent,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              "Loading stream...",
+              style: TextStyle(color: Colors.white54, fontSize: 13, letterSpacing: 1.1),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // The ONE webview used on Windows, Android and iOS.
+  Widget _buildInAppWebView() {
+    return InAppWebView(
+      key: const ValueKey("win_movie_player_webview"),
+      // Only Windows has an environment. On mobile this is null, which is fine.
+      webViewEnvironment: _webViewEnvironment,
+      initialUrlRequest: URLRequest(url: WebUri(_playerUrl)),
+
+      // Inject the cleanup script into the page AND every iframe.
+      // This is the key fix for the vidsrc.to pop-up ad: the ad lives inside
+      // an iframe, and the old mobile webview could not reach it.
+      initialUserScripts: UnmodifiableListView([
+        UserScript(
+          source: _cleanupScript,
+          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+          forMainFrameOnly: false,
+        ),
+        UserScript(
+          source: _cleanupScript,
+          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
+          forMainFrameOnly: false,
+        ),
+      ]),
+
+      initialSettings: InAppWebViewSettings(
+        userAgent: _userAgent,
+        preferredContentMode: UserPreferredContentMode.MOBILE,
+        useWideViewPort: false,
+        loadWithOverviewMode: false,
+        transparentBackground: false,
+        useShouldOverrideUrlLoading: true,
+        mediaPlaybackRequiresUserGesture: false,
+        allowsInlineMediaPlayback: true,
+        hardwareAcceleration: true,
+        javaScriptEnabled: true,
+        javaScriptCanOpenWindowsAutomatically: false,
+        supportMultipleWindows: false,
+        isInspectable: kDebugMode,
+      ),
+
+      onWebViewCreated: (controller) {
+        _winController = controller;
+      },
+
+      onProgressChanged: (controller, progress) {
+        if (!mounted) return;
+        setState(() {
+          loadingProgress = progress / 100;
+          if (progress > 35) {
+            isLoading = false;
+            _hasLoadedOnce = true;
+            _mobileSafetyTimer?.cancel();
+          }
+        });
+        // We no longer run the cleanup script here.
+        // This callback fires many times while loading, and re-running the
+        // script each time made the video slow to start.
+      },
+
+      onLoadStart: (controller, url) {
+        if (!mounted) return;
+        if (!_hasLoadedOnce) {
+          setState(() => isLoading = true);
+        }
+        // Safety net: never keep the loading screen for more than 3 seconds
+        _mobileSafetyTimer?.cancel();
+        _mobileSafetyTimer = Timer(const Duration(seconds: 3), () {
+          if (mounted && isLoading) {
+            setState(() => isLoading = false);
+          }
+        });
+        controller.evaluateJavascript(source: _cleanupScript);
+      },
+
+      onLoadStop: (controller, url) async {
+        if (!mounted) return;
+        setState(() {
+          isLoading = false;
+          _hasLoadedOnce = true;
+        });
+        _mobileSafetyTimer?.cancel();
+        await controller.evaluateJavascript(source: _cleanupScript);
+        await controller.evaluateJavascript(source: "document.body.style.backgroundColor = 'black';");
+      },
+
+      onReceivedError: (controller, request, error) {
+        debugPrint("WebView Load Error: ${error.description} (code: ${error.type}) at ${request.url}");
+      },
+
+      onReceivedHttpError: (controller, request, errorResponse) {
+        debugPrint("WebView HTTP Error: ${errorResponse.reasonPhrase} (status: ${errorResponse.statusCode}) at ${request.url}");
+      },
+
+      // Block every popup window (target=_blank, window.open)
+      onCreateWindow: (controller, createWindowAction) async {
+        return false;
+      },
+
+      // Block ad files before they download (Android and Windows).
+      // iOS does not support this callback.
+      shouldInterceptRequest: (controller, request) async {
+        final url = request.url.toString().toLowerCase();
+
+        if (kAdNetworkKeywords.any((word) => url.contains(word))) {
+          debugPrint("Intercepted and blocked ad resource: $url");
+          return WebResourceResponse(
+            contentType: 'text/javascript',
+            data: Uint8List(0),
+          );
+        }
+
+        return null;
+      },
+
+      // Decide if the page may navigate to a new URL
+      shouldOverrideUrlLoading: (controller, navigationAction) async {
+        final uri = navigationAction.request.url;
+        if (uri == null) return NavigationActionPolicy.CANCEL;
+
+        final allowed = _shouldAllowUrl(
+          uri.toString(),
+          isMainFrame: navigationAction.isForMainFrame,
+        );
+
+        return allowed ? NavigationActionPolicy.ALLOW : NavigationActionPolicy.CANCEL;
+      },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // build()
+  // -------------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
-    bool isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
-
     Widget body;
-    if (_isWindows) {
+    if (_isLinux) {
+      body = _buildBrowserFallback("Playback opens in your browser on Linux.");
+    } else if (_isWindows) {
+      // ---------- Windows ----------
       if (_winInitFailed) {
         body = _buildBrowserFallback(
           "Couldn't start the in-app player (WebView2 Runtime may be missing).",
@@ -1185,175 +1525,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
           onHover: (_) => _onMouseMoved(),
           child: Stack(
             children: [
-              InAppWebView(
-                webViewEnvironment: _webViewEnvironment,
-                initialUrlRequest: URLRequest(url: WebUri(_playerUrl)),
-                initialUserScripts: UnmodifiableListView([
-                  UserScript(
-                    source: _cleanupScript,
-                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-                    forMainFrameOnly: false,
-                  ),
-                  UserScript(
-                    source: _cleanupScript,
-                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
-                    forMainFrameOnly: false,
-                  ),
-                ]),
-                initialSettings: InAppWebViewSettings(
-                  userAgent:
-                  "Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36",
-                  preferredContentMode: UserPreferredContentMode.MOBILE,
-                  transparentBackground: false,
-                  useShouldOverrideUrlLoading: true,
-                  mediaPlaybackRequiresUserGesture: false,
-                  allowsInlineMediaPlayback: true,
-                  javaScriptEnabled: true,
-                  javaScriptCanOpenWindowsAutomatically: false,
-                  supportMultipleWindows: false,
-                  isInspectable: kDebugMode,
-                ),
-                onWebViewCreated: (controller) {
-                  _winController = controller;
-                },
-                onProgressChanged: (controller, progress) {
-                  setState(() {
-                    loadingProgress = progress / 100;
-                    if (progress > 80) {
-                      isLoading = false;
-                      _hasLoadedOnce = true;
-                    }
-                  });
-                  if (progress > 10) {
-                    controller.evaluateJavascript(source: _cleanupScript);
-                  }
-                },
-                onLoadStart: (controller, url) {
-                  if (!_hasLoadedOnce) {
-                    setState(() => isLoading = true);
-                  }
-                  controller.evaluateJavascript(source: _cleanupScript);
-                },
-                onLoadStop: (controller, url) async {
-                  setState(() {
-                    isLoading = false;
-                    _hasLoadedOnce = true;
-                  });
-                  await controller.evaluateJavascript(source: _cleanupScript);
-                  await controller.evaluateJavascript(source: """
-                    document.body.style.backgroundColor = 'black';
-                    var divs = document.getElementsByTagName('div');
-                    for(var i=0; i<divs.length; i++) {
-                      if(divs[i].style.zIndex > 1000) divs[i].remove();
-                    }
-                  """);
-                },
-                onReceivedError: (controller, request, error) {
-                  debugPrint("WebView Load Error: ${error.description} (code: ${error.type}) at ${request.url}");
-                },
-                onReceivedHttpError: (controller, request, errorResponse) {
-                  debugPrint("WebView HTTP Error: ${errorResponse.reasonPhrase} (status: ${errorResponse.statusCode}) at ${request.url}");
-                },
-                onCreateWindow: (controller, createWindowAction) async {
-                  return false;
-                },
-                shouldInterceptRequest: (controller, request) async {
-                  final url = request.url.toString().toLowerCase();
-
-                  final badAdDomains = [
-                    "alwingulla", "adsterra", "monetag", "highrevenuegate", "profitcpm",
-                    "exoclick", "juicyads", "hilltopads", "syndication", "propeller",
-                    "popunder", "popads", "popcash", "ad-delivery", "onclickads",
-                    "clickadilla", "trafficjunky", "doubleclick", "outbrain", "taboola"
-                  ];
-
-                  if (badAdDomains.any((domain) => url.contains(domain))) {
-                    debugPrint("Intercepted and blocked ad resource: $url");
-                    return WebResourceResponse(
-                      contentType: 'text/javascript',
-                      data: Uint8List(0),
-                    );
-                  }
-
-                  return null;
-                },
-                shouldOverrideUrlLoading: (controller, navigationAction) async {
-                  final uri = navigationAction.request.url;
-                  if (uri == null) return NavigationActionPolicy.CANCEL;
-
-                  final url = uri.toString().toLowerCase();
-
-                  final adKeywords = [
-                    "adsterra", "monetag", "alwingulla", "propeller", "exoclick",
-                    "juicyads", "hilltopads", "syndication", "doubleclick",
-                    "bet365", "1xbet", "casino", "popunder", "popup",
-                    "click.", "redirect", "traffic", "zedo", "outbrain", "taboola",
-                    "ad.", "ads.", "banner", "pop.", "track", "analytic", "clicker",
-                    "onclick", "creative", "affiliate", "promo", "lead", "spin", "win",
-                    "gift", "bonus", "betting", "poker", "slot"
-                  ];
-                  if (adKeywords.any((kw) => url.contains(kw))) {
-                    debugPrint("Blocking explicit ad: $url");
-                    return NavigationActionPolicy.CANCEL;
-                  }
-
-                  final allowedDomains = [
-                    "vidsrc", "vsembed", "2embed", "autoembed", "vidplay",
-                    "megacloud", "vizcloud", "rabbitstream", "cloudnest",
-                    "movie-api", "mcloud", "filemoon", "streamtape", "embedsu",
-                    "superstream", "google.com", "gstatic.com", "cloudflare",
-                    "hcaptcha", "recaptcha"
-                  ];
-
-                  final playerUri = Uri.tryParse(_playerUrl);
-                  final playerHost = playerUri?.host.toLowerCase();
-
-                  bool isAllowed = allowedDomains.any((domain) => url.contains(domain)) ||
-                      (playerHost != null && playerHost.isNotEmpty && url.contains(playerHost));
-
-                  if (navigationAction.isForMainFrame) {
-                    if (_hasLoadedOnce) {
-                      final reqUri = Uri.tryParse(url);
-                      final reqHost = reqUri?.host.toLowerCase();
-                      if (playerHost != null && reqHost != null && playerHost != reqHost && !url.contains(widget.tmdbId.toString())) {
-                        debugPrint("Blocking post-load main frame redirect to: $url");
-                        return NavigationActionPolicy.CANCEL;
-                      }
-                    }
-
-                    if (isAllowed || url == _playerUrl.toLowerCase()) {
-                      return NavigationActionPolicy.ALLOW;
-                    }
-                    debugPrint("Blocking main frame redirect to: $url");
-                    return NavigationActionPolicy.CANCEL;
-                  }
-
-                  if (!isAllowed) {
-                    return NavigationActionPolicy.CANCEL;
-                  }
-
-                  return NavigationActionPolicy.ALLOW;
-                },
-              ),
-              if (isLoading)
-                Container(
-                  color: Colors.black,
-                  child: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        CircularProgressIndicator(
-                          value: loadingProgress > 0 ? loadingProgress : null,
-                          color: AppColors.accent,
-                        ),
-                        const SizedBox(height: 16),
-                        const Text("Loading stream...", style: TextStyle(color: Colors.white54, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                ),
+              _buildInAppWebView(),
+              if (isLoading && !_hasLoadedOnce) _buildLoadingOverlay(),
               // Floating exit button for Full Screen
-              if (_isWindows && _isFullScreen && _showControls)
+              if (_isFullScreen && _showControls)
                 Positioned(
                   top: 20,
                   right: 20,
@@ -1373,11 +1548,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
           ),
         );
       }
-    } else if (_isLinux) {
-      body = _buildBrowserFallback("Playback opens in your browser on Linux.");
     } else {
+      // ---------- Android / iOS ----------
       body = Stack(
         children: [
+          // Tapping the video shows / hides our controls
           Listener(
             behavior: HitTestBehavior.translucent,
             onPointerDown: (_) {
@@ -1392,35 +1567,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
                 });
               }
             },
-            child: WebViewWidget(controller: _controller!),
+            child: _buildInAppWebView(),
           ),
-          if (isLoading && !_hasLoadedOnce)
-            Container(
-              color: Colors.black,
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const CircularProgressIndicator(
-                      strokeWidth: 3,
-                      color: AppColors.accent,
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Loading stream...",
-                      style: TextStyle(color: Colors.white54, fontSize: 13, letterSpacing: 1.1),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          if (isLoading && !_hasLoadedOnce) _buildLoadingOverlay(),
           _buildMobileControls(),
         ],
       );
     }
 
+    // On phones we draw our own controls on top of the video, so no AppBar.
     final bool useMobileOverlay = !_isWindows && !_isLinux;
-    final bool hideAppBar = _isFullScreen || useMobileOverlay || (!_isWindows && !_isLinux && isLandscape);
+    final bool hideAppBar = _isFullScreen || useMobileOverlay;
 
     final playerScaffold = Scaffold(
       backgroundColor: Colors.black,
@@ -1520,22 +1677,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
             IconButton(
               icon: const Icon(Icons.info_outline, color: Colors.white),
               tooltip: "Series Info",
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => MovieDetailsScreen(
-                      movie: {
-                        'id': widget.tmdbId,
-                        'name': _tvName ?? widget.title.split(' - ')[0],
-                        'poster_path': widget.posterPath,
-                        'backdrop_path': widget.backdropPath,
-                        'vote_average': widget.voteAverage,
-                      },
-                    ),
-                  ),
-                );
-              },
+              onPressed: _showInfo,
             ),
           if (_isWindows) ...[
             IconButton(

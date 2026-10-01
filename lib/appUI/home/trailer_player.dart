@@ -264,7 +264,8 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> with WindowLi
           child: Stack(
             children: [
               InAppWebView(
-                  webViewEnvironment: _webViewEnvironment,
+                key: const ValueKey("win_trailer_player_webview"),
+                webViewEnvironment: _webViewEnvironment,
                   initialUrlRequest: URLRequest(
                     url: WebUri("https://www.youtube.com/embed/${widget.youtubeKey}?autoplay=1"),
                   ),
