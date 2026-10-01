@@ -1,0 +1,115 @@
+name: movie_explorer
+description: "A new Flutter project."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  shared_preferences: ^2.3.5
+  youtube_player_flutter: ^9.1.1
+  webview_flutter: ^4.10.0
+  flutter_inappwebview: ^6.1.5
+  url_launcher: ^6.3.1
+  window_manager: ^0.4.3
+  path_provider: ^2.1.2
+  flutter_dotenv: ^5.1.0
+  screen_retriever: ^0.2.0
+
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.13.1
+  msix: ^3.18.0
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  # windows/runner/resources/app_icon.ico is already generated from this
+  # same source image (see README's Windows section) — this entry just
+  # keeps flutter_launcher_icons in sync if it's ever re-run by hand.
+  windows:
+    generate: true
+    image_path: "images/cinema_film_movie_multimedia_player_icon.png"
+    icon_size: 256
+  image_path: "images/cinema_film_movie_multimedia_player_icon.png"
+  min_sdk_android: 21
+
+# Packages the Windows build into an installable .msix, complete with a
+# Start Menu entry, app icon, and a proper Windows uninstaller entry.
+#
+# Build it with:
+#   flutter build windows --release
+#   dart run msix:create
+#
+# The resulting installer is at:
+#   build\windows\x64\runner\Release\movie_explorer.msix
+#
+# No certificate is configured below, so msix will generate a free
+# self-signed test certificate automatically at build time. Anyone
+# installing the app on another laptop needs to install that same
+# certificate into "Trusted People" once before double-clicking the
+# .msix (see README.md for the exact steps) — this is only required
+# because the app isn't published through the Microsoft Store.
+msix_config:
+  display_name: Movie Explorer
+  publisher_display_name: Oscar Mutura
+  identity_name: com.oscarmutura.movieexplorer
+  publisher: CN=OscarMutura
+  msix_version: 1.0.0.0
+  logo_path: images/cinema_film_movie_multimedia_player_icon.png
+  capabilities: internetClient
+  languages: en-us
+  store: false
+
+flutter:
+
+
+  uses-material-design: true
+
+
+  assets:
+   - images/
+   - .env
+
+
+  # An image asset can refer to one or more resolution-specific "variants", see
+  # https://flutter.dev/to/resolution-aware-images
+
+  # For details regarding adding assets from package dependencies, see
+  # https://flutter.dev/to/asset-from-package
+
+  # To add custom fonts to your application, add a fonts section here,
+  # in this "flutter" section. Each entry in this list should have a
+  # "family" key with the font family name, and a "fonts" key with a
+  # list giving the asset and other descriptors for the font. For
+  # example:
+  # fonts:
+  #   - family: Schyler
+  #     fonts:
+  #       - asset: fonts/Schyler-Regular.ttf
+  #       - asset: fonts/Schyler-Italic.ttf
+  #         style: italic
+  #   - family: Trajan Pro
+  #     fonts:
+  #       - asset: fonts/TrajanPro.ttf
+  #       - asset: fonts/TrajanPro_Bold.ttf
+  #         weight: 700
+  #
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/to/font-from-package
