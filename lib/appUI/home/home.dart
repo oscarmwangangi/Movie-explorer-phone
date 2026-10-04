@@ -36,6 +36,9 @@ class _HomeScreenState extends State<HomeScreen> {
   List sciFiMovies = [];
   List documentaries = [];
   List romanceMovies = [];
+  List comedyMovies = [];
+  List thrillerMovies = [];
+  List onTheAirTV = [];
 
   List<Map<String, dynamic>> continueWatching = [];
   List myList = [];
@@ -82,6 +85,9 @@ class _HomeScreenState extends State<HomeScreen> {
         TMDBService.getSciFiFantasyMovies(),
         TMDBService.getDocumentaries(),
         TMDBService.getRomanceMovies(),
+        TMDBService.getComedyMovies(),
+        TMDBService.getThrillerMovies(),
+        TMDBService.getOnTheAirTVSeries(),
       ]);
       if (mounted) {
         setState(() {
@@ -98,6 +104,9 @@ class _HomeScreenState extends State<HomeScreen> {
           sciFiMovies = results[10];
           documentaries = results[11];
           romanceMovies = results[12];
+          comedyMovies = results[13];
+          thrillerMovies = results[14];
+          onTheAirTV = results[15];
           isLoading = false;
 
           // Pick a hero movie from Trending (falling back to Popular),
@@ -142,7 +151,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     const Icon(Icons.error_outline, color: Colors.white54, size: 48),
                     const SizedBox(height: 16),
                     Text(
-                      "Failed to load movies.\nPlease check your internet connection or API key.",
+                      "Failed to load movies.\nPlease check your internet connection",
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.white70),
                     ),
@@ -225,9 +234,12 @@ class _HomeScreenState extends State<HomeScreen> {
               Moviesection(title: 'Popular TV Shows', categoryType: 'TV Series', movies: tvSeries, isLoading: isLoading),
               Moviesection(title: 'Top Rated Movies', movies: topRatedMovies, isLoading: isLoading),
               Moviesection(title: 'Top Rated TV', movies: topRatedTV, isLoading: isLoading),
+              Moviesection(title: 'Currently Airing TV', categoryType: 'On The Air', movies: onTheAirTV, isLoading: isLoading),
               Moviesection(title: 'Upcoming', movies: upcomingMovies, isLoading: isLoading),
               Moviesection(title: 'Action', movies: actionMovies, isLoading: isLoading),
               Moviesection(title: 'Sci-Fi & Fantasy', movies: sciFiMovies, isLoading: isLoading),
+              Moviesection(title: 'Comedy', movies: comedyMovies, isLoading: isLoading),
+              Moviesection(title: 'Thriller', movies: thrillerMovies, isLoading: isLoading),
               Moviesection(title: 'Horror', movies: horrorMovies, isLoading: isLoading),
               Moviesection(title: 'Romance', movies: romanceMovies, isLoading: isLoading),
               Moviesection(title: 'Documentaries', movies: documentaries, isLoading: isLoading),

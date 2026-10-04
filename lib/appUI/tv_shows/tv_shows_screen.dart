@@ -18,11 +18,31 @@ class TVShowsScreen extends StatefulWidget {
 }
 
 class _TVShowsScreenState extends State<TVShowsScreen> {
-  static const List<String> genres = ['TV Series', 'Top Rated TV'];
+  static const List<String> genres = [
+    'Popular TV Shows',
+    'Top Rated TV',
+    'Currently Airing',
+    'Airing Today',
+    'Action & Adventure TV',
+    'Sci-Fi & Fantasy TV',
+    'Crime & Mystery TV',
+    'Comedy TV',
+    'Drama TV',
+    'Animated TV Series',
+  ];
 
   dynamic featured;
   List popularTv = [];
   List topRatedTv = [];
+  List onTheAirTv = [];
+  List airingTodayTv = [];
+  List actionTv = [];
+  List sciFiTv = [];
+  List crimeTv = [];
+  List comedyTv = [];
+  List dramaTv = [];
+  List animationTv = [];
+
   bool isLoading = true;
   String? errorMessage;
 
@@ -41,11 +61,27 @@ class _TVShowsScreenState extends State<TVShowsScreen> {
       final results = await Future.wait([
         TMDBService.getTVSeries(),
         TMDBService.getTopRatedTVSeries(),
+        TMDBService.getOnTheAirTVSeries(),
+        TMDBService.getAiringTodayTVSeries(),
+        TMDBService.getActionAdventureTV(),
+        TMDBService.getSciFiFantasyTV(),
+        TMDBService.getCrimeTV(),
+        TMDBService.getComedyTV(),
+        TMDBService.getDramaTV(),
+        TMDBService.getAnimationTV(),
       ]);
       if (!mounted) return;
       setState(() {
         popularTv = results[0];
         topRatedTv = results[1];
+        onTheAirTv = results[2];
+        airingTodayTv = results[3];
+        actionTv = results[4];
+        sciFiTv = results[5];
+        crimeTv = results[6];
+        comedyTv = results[7];
+        dramaTv = results[8];
+        animationTv = results[9];
         featured = popularTv.isNotEmpty ? popularTv[0] : null;
         isLoading = false;
       });
@@ -172,6 +208,14 @@ class _TVShowsScreenState extends State<TVShowsScreen> {
                           const SizedBox(height: 8),
                           Moviesection(title: 'Popular TV Shows', categoryType: 'TV Series', movies: popularTv, isLoading: isLoading),
                           Moviesection(title: 'Top Rated TV', movies: topRatedTv, isLoading: isLoading),
+                          Moviesection(title: 'Currently Airing', categoryType: 'On The Air', movies: onTheAirTv, isLoading: isLoading),
+                          Moviesection(title: 'Airing Today', movies: airingTodayTv, isLoading: isLoading),
+                          Moviesection(title: 'Action & Adventure TV', categoryType: 'TV Action & Adventure', movies: actionTv, isLoading: isLoading),
+                          Moviesection(title: 'Sci-Fi & Fantasy TV', categoryType: 'TV Sci-Fi & Fantasy', movies: sciFiTv, isLoading: isLoading),
+                          Moviesection(title: 'Crime & Mystery TV', categoryType: 'TV Crime', movies: crimeTv, isLoading: isLoading),
+                          Moviesection(title: 'Comedy TV Shows', categoryType: 'TV Comedy', movies: comedyTv, isLoading: isLoading),
+                          Moviesection(title: 'Drama TV Shows', categoryType: 'TV Drama', movies: dramaTv, isLoading: isLoading),
+                          Moviesection(title: 'Animated TV Series', categoryType: 'TV Animation', movies: animationTv, isLoading: isLoading),
                         ],
                         const SizedBox(height: 20),
                       ],

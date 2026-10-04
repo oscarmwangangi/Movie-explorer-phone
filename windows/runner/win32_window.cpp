@@ -198,11 +198,21 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
     }
     case WM_SIZE: {
-      RECT rect = GetClientArea();
-      if (child_content_ != nullptr) {
-        // Size and position the child window.
-        MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
-                   rect.bottom - rect.top, TRUE);
+      if (wparam == SIZE_MINIMIZED) {
+        EnumChildWindows(hwnd, [](HWND c, LPARAM) -> BOOL {
+          ShowWindow(c, SW_HIDE);
+          return TRUE;
+        }, 0);
+      } else {
+        EnumChildWindows(hwnd, [](HWND c, LPARAM) -> BOOL {
+          ShowWindow(c, SW_SHOW);
+          return TRUE;
+        }, 0);
+        RECT rect = GetClientArea();
+        if (child_content_ != nullptr) {
+          MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
+                     rect.bottom - rect.top, TRUE);
+        }
       }
       return 0;
     }

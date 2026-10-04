@@ -28,9 +28,12 @@ class _MoviesScreenState extends State<MoviesScreen> {
     'Action',
     'Sci-Fi & Fantasy',
     'Horror',
+    'Comedy',
+    'Thriller',
     'Romance',
     'Documentaries',
     'Kids & Animation',
+    'Adventure',
   ];
 
   dynamic featured;
@@ -39,6 +42,15 @@ class _MoviesScreenState extends State<MoviesScreen> {
   List nowPlaying = [];
   List upcoming = [];
   List action = [];
+  List sciFi = [];
+  List horror = [];
+  List comedy = [];
+  List thriller = [];
+  List romance = [];
+  List documentaries = [];
+  List kids = [];
+  List adventure = [];
+
   bool isLoading = true;
   String? errorMessage;
 
@@ -60,6 +72,14 @@ class _MoviesScreenState extends State<MoviesScreen> {
         TMDBService.getNowPlayingMovies(),
         TMDBService.getUpcomingMovies(),
         TMDBService.getActionMovies(),
+        TMDBService.getSciFiFantasyMovies(),
+        TMDBService.getHorrorMovies(),
+        TMDBService.getComedyMovies(),
+        TMDBService.getThrillerMovies(),
+        TMDBService.getRomanceMovies(),
+        TMDBService.getDocumentaries(),
+        TMDBService.getKidsMovies(),
+        TMDBService.getAdventureMovies(),
       ]);
       if (!mounted) return;
       setState(() {
@@ -68,6 +88,14 @@ class _MoviesScreenState extends State<MoviesScreen> {
         nowPlaying = results[2];
         upcoming = results[3];
         action = results[4];
+        sciFi = results[5];
+        horror = results[6];
+        comedy = results[7];
+        thriller = results[8];
+        romance = results[9];
+        documentaries = results[10];
+        kids = results[11];
+        adventure = results[12];
         featured = popular.isNotEmpty ? popular[0] : null;
         isLoading = false;
       });
@@ -193,10 +221,18 @@ class _MoviesScreenState extends State<MoviesScreen> {
                           ),
                           const SizedBox(height: 8),
                           Moviesection(title: 'Popular Movies', movies: popular, isLoading: isLoading),
-                          Moviesection(title: 'Top Rated Movies', movies: topRated, isLoading: isLoading),
                           Moviesection(title: 'Now Playing', movies: nowPlaying, isLoading: isLoading),
+                          Moviesection(title: 'Top Rated Movies', movies: topRated, isLoading: isLoading),
                           Moviesection(title: 'Upcoming', movies: upcoming, isLoading: isLoading),
                           Moviesection(title: 'Action', movies: action, isLoading: isLoading),
+                          Moviesection(title: 'Sci-Fi & Fantasy', movies: sciFi, isLoading: isLoading),
+                          Moviesection(title: 'Horror', movies: horror, isLoading: isLoading),
+                          Moviesection(title: 'Comedy', movies: comedy, isLoading: isLoading),
+                          Moviesection(title: 'Thriller', movies: thriller, isLoading: isLoading),
+                          Moviesection(title: 'Romance', movies: romance, isLoading: isLoading),
+                          Moviesection(title: 'Adventure', movies: adventure, isLoading: isLoading),
+                          Moviesection(title: 'Kids & Animation', movies: kids, isLoading: isLoading),
+                          Moviesection(title: 'Documentaries', movies: documentaries, isLoading: isLoading),
                         ],
                         const SizedBox(height: 20),
                       ],

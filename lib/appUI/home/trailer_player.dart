@@ -128,11 +128,19 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> with WindowLi
       setState(() {
         _isMinimized = true;
       });
-      // Try to pause video playback when minimized
+      _winController?.pause();
       _winController?.evaluateJavascript(source: """
         (function() {
-          var vids = document.getElementsByTagName('video');
-          for (var i = 0; i < vids.length; i++) vids[i].pause();
+          function pauseAll(w) {
+            try {
+              var vids = w.document.querySelectorAll('video, audio');
+              for (var i = 0; i < vids.length; i++) vids[i].pause();
+            } catch(e) {}
+            try {
+              for (var i = 0; i < w.frames.length; i++) pauseAll(w.frames[i]);
+            } catch(e) {}
+          }
+          pauseAll(window);
         })();
       """);
     }
@@ -144,11 +152,21 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> with WindowLi
       setState(() {
         _isMinimized = false;
       });
-      // Try to resume video playback when restored
+      _winController?.resume();
       _winController?.evaluateJavascript(source: """
         (function() {
-          var vids = document.getElementsByTagName('video');
-          for (var i = 0; i < vids.length; i++) vids[i].play();
+          function playAll(w) {
+            try {
+              var vids = w.document.querySelectorAll('video, audio');
+              for (var i = 0; i < vids.length; i++) {
+                if (vids[i].paused && vids[i].currentTime > 0) vids[i].play().catch(function(){});
+              }
+            } catch(e) {}
+            try {
+              for (var i = 0; i < w.frames.length; i++) playAll(w.frames[i]);
+            } catch(e) {}
+          }
+          playAll(window);
         })();
       """);
     }
@@ -206,6 +224,7 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> with WindowLi
   }
 
   void _onMouseMoved() {
+    if (_isMinimized) return;
     if (!_showControls) {
       setState(() => _showControls = true);
     }
@@ -264,32 +283,32 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> with WindowLi
           child: Stack(
             children: [
               InAppWebView(
-                key: const ValueKey("win_trailer_player_webview"),
-                webViewEnvironment: _webViewEnvironment,
+                  key: const ValueKey("win_trailer_player_webview"),
+                  webViewEnvironment: _webViewEnvironment,
                   initialUrlRequest: URLRequest(
                     url: WebUri("https://www.youtube.com/embed/${widget.youtubeKey}?autoplay=1"),
                   ),
-                initialSettings: InAppWebViewSettings(
-                  transparentBackground: false, // Prevents freeze during full-screen resize
-                  mediaPlaybackRequiresUserGesture: false,
-                  allowsInlineMediaPlayback: true,
-                  javaScriptEnabled: true,
-                  javaScriptCanOpenWindowsAutomatically: false,
-                  supportMultipleWindows: false,
+                  initialSettings: InAppWebViewSettings(
+                    transparentBackground: false, // Prevents freeze during full-screen resize
+                    mediaPlaybackRequiresUserGesture: false,
+                    allowsInlineMediaPlayback: true,
+                    javaScriptEnabled: true,
+                    javaScriptCanOpenWindowsAutomatically: false,
+                    supportMultipleWindows: false,
+                  ),
+                  onWebViewCreated: (controller) {
+                    _winController = controller;
+                  },
+                  onLoadStart: (controller, url) {
+                    setState(() => _winLoading = true);
+                  },
+                  onLoadStop: (controller, url) {
+                    setState(() => _winLoading = false);
+                  },
+                  onCreateWindow: (controller, createWindowAction) async {
+                    return false;
+                  },
                 ),
-                onWebViewCreated: (controller) {
-                  _winController = controller;
-                },
-                onLoadStart: (controller, url) {
-                  setState(() => _winLoading = true);
-                },
-                onLoadStop: (controller, url) {
-                  setState(() => _winLoading = false);
-                },
-                onCreateWindow: (controller, createWindowAction) async {
-                  return false;
-                },
-              ),
               // Floating exit button for Full Screen
               if (_isWindows && _isFullScreen && _showControls)
                 Positioned(

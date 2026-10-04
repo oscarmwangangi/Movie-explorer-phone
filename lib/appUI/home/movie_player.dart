@@ -15,8 +15,16 @@ import 'package:movie_explorer/appUI/services/tmdb_service.dart';
 import 'package:movie_explorer/appUI/home/movie_details.dart';
 
 // NOTE: webview_flutter is no longer used in this file.
-// We now use flutter_inappwebview on Windows, Android and iOS, because it
+// We use flutter_inappwebview on Windows, Android and iOS, because it
 // can inject our ad-cleaning script into EVERY iframe (ads live in iframes).
+
+// ---------------------------------------------------------------------------
+// TEMP TEST SWITCH
+// ---------------------------------------------------------------------------
+// If a server still freezes the app, set this to false and run again.
+// false = the ad-cleaning JavaScript is NOT injected at all.
+// If the freeze disappears, the script is the cause.
+const bool kEnableCleanupScript = true;
 
 // ---------------------------------------------------------------------------
 // Streaming servers
@@ -27,10 +35,17 @@ class ServerOption {
   final String movieUrl;
   final String tvUrl;
 
+  // How the final URL is built:
+  //   'path'    -> movieUrl/ID           and tvUrl/ID/SEASON/EPISODE
+  //   'query'   -> movieUrl?tmdb=ID      and tvUrl?tmdb=ID&season=S&episode=E
+  //   'vidlink' -> same as 'path' but with a ?primaryColor=... at the end
+  final String style;
+
   const ServerOption({
     required this.name,
     required this.movieUrl,
     required this.tvUrl,
+    this.style = 'path',
   });
 }
 
@@ -39,31 +54,21 @@ final List<ServerOption> kServerOptions = [
     name: 'Server 1',
     movieUrl: 'https://vidsrc.to/embed/movie',
     tvUrl: 'https://vidsrc.to/embed/tv',
+    style: 'path',
   ),
-  const ServerOption(
-    name: 'Server 2',
-    movieUrl: 'https://vidsrc.me/embed/movie',
-    tvUrl: 'https://vidsrc.me/embed/tv',
-  ),
+  // CHANGED: Server 2 is vidsrc.me (it was vidsrc.sh before).
+  // vidsrc.me uses query-style URLs: /embed/movie?tmdb=ID
   // const ServerOption(
-  //   name: 'Embed.su (Fast HD)',
-  //   movieUrl: 'https://embed.su/embed/movie',
-  //   tvUrl: 'https://embed.su/embed/tv',
-  // ),
-  // const ServerOption(
-  //   name: 'AutoEmbed (Fast HD)',
-  //   movieUrl: 'https://player.autoembed.cc/embed/movie',
-  //   tvUrl: 'https://player.autoembed.cc/embed/tv',
-  // ),
-  // const ServerOption(
-  //   name: 'VidSrc.cc (HD)',
-  //   movieUrl: 'https://vidsrc.cc/v2/embed/movie',
-  //   tvUrl: 'https://vidsrc.cc/v2/embed/tv',
+  //   name: 'Server 2',
+  //   movieUrl: 'https://vidsrc.me/embed/movie',
+  //   tvUrl: 'https://vidsrc.me/embed/tv',
+  //   style: 'query',
   // ),
   const ServerOption(
     name: 'Server 3 (Ad-Free) HD',
     movieUrl: 'https://vidlink.pro/movie',
     tvUrl: 'https://vidlink.pro/tv',
+    style: 'vidlink',
   ),
 ];
 
@@ -73,8 +78,6 @@ final List<ServerOption> kServerOptions = [
 
 // Names of known ad networks / betting sites. If a URL contains any of these,
 // we block it.
-// I removed very short words like "win", "lead", "track" and "ad." because
-// they also match normal URLs and could break the real player.
 const List<String> kAdNetworkKeywords = [
   "adsterra", "monetag", "alwingulla", "propeller", "exoclick",
   "juicyads", "hilltopads", "syndication", "doubleclick", "popunder",
@@ -89,7 +92,7 @@ const List<String> kAdUrlPaths = [
 ];
 
 // Domains the player is allowed to load from.
-// If a server stops working on your phone, check the debug console for a
+// If a server stops working, check the debug console for a
 // "Blocking ..." message and add that domain here.
 const List<String> kAllowedDomains = [
   "vidsrc", "vsembed", "2embed", "autoembed", "vidplay",
@@ -98,6 +101,9 @@ const List<String> kAllowedDomains = [
   "movie-api", "mcloud", "filemoon", "streamtape", "embed.su", "embedsu",
   "vidlink", "superstream", "google.com", "gstatic.com", "cloudflare",
   "hcaptcha", "recaptcha", "smashystream", "vidsrc.cc", "vidsrc.icu",
+  // CHANGED: extra domains that vidsrc.me redirects to / loads from.
+  "vidsrc.me", "vidsrc.net", "vidsrc.xyz", "vidsrcme", "vidsrc-embed",
+  "cloudnestra",
 ];
 
 // ---------------------------------------------------------------------------
@@ -134,7 +140,6 @@ class MoviePlayerScreen extends StatefulWidget {
 
 class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListener {
   // The webview controller. Used on Windows, Android and iOS.
-  // (The variable is still called _winController to keep the diff small.)
   InAppWebViewController? _winController;
 
   // Only Windows needs this (WebView2 environment). It stays null on mobile.
@@ -143,6 +148,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   bool _winInitFailed = false;
   bool _hasLoadedOnce = false;
   bool _isFullScreen = false;
+  bool _isMinimized = false;
   bool _showControls = true;
   Timer? _hideTimer;
   Timer? _mobileSafetyTimer;
@@ -176,17 +182,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   // JavaScript that is injected into the player page AND all of its iframes.
   // It removes popups, fake "missed video call" boxes and ad links.
   // It is a raw string (r"""...""") so Dart does not touch $ signs inside it.
+  //
+  // CHANGES compared to the old version (these were the freeze risks):
+  //  - Removed the window.top / window.parent Proxy (it broke player code).
+  //  - The fake-call scan only looks at SMALL elements (short text) and uses
+  //    textContent (cheap) instead of innerText (forces page layout).
+  //  - Removed broad words like 'missed', 'video call', 'chat with' that
+  //    matched normal player text and caused remove -> re-add -> remove loops.
+  //  - Removed the shadow-root scan of every element on the page.
+  //  - The periodic scan runs every 2 seconds instead of every 0.5 seconds.
   static const String _cleanupScript = r"""
     (function() {
-      if (window.__cleanupInstalled) {
-        if (typeof window.purgeLoadersAndAds === 'function') {
-          window.purgeLoadersAndAds();
-        }
-        return;
-      }
+      if (window.__cleanupInstalled) return;
       window.__cleanupInstalled = true;
 
-      // 1. Mock window proxy to trick popup detection scripts
+      // 1. Fake window object for popups
       var dummyWindow = {
         closed: false,
         focus: function() {},
@@ -207,71 +217,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         }
       };
 
-      var dummyWindowProxy = new Proxy(dummyWindow, {
-        get: function(target, prop) {
-          if (prop === 'closed') return false;
-          if (prop in target) return target[prop];
-          return function() {};
-        },
-        set: function(target, prop, value) {
-          return true;
-        }
-      });
-
       function fakeWindowOpen() {
-        return dummyWindowProxy;
+        return dummyWindow;
       }
 
-      function disablePopups(win) {
-        if (!win) return;
+      function disablePopups() {
         try {
-          try {
-            Object.defineProperty(win, 'open', { value: fakeWindowOpen, writable: false, configurable: false });
-          } catch(e) { win.open = fakeWindowOpen; }
-
-          try {
-            Object.defineProperty(win, 'alert', { value: function() {}, writable: false, configurable: false });
-          } catch(e) { win.alert = function() {}; }
-
-          try {
-            Object.defineProperty(win, 'confirm', { value: function() { return true; }, writable: false, configurable: false });
-          } catch(e) { win.confirm = function() { return true; }; }
-
-          try {
-            Object.defineProperty(win, 'prompt', { value: function() { return null; }, writable: false, configurable: false });
-          } catch(e) { win.prompt = function() { return null; }; }
-        } catch(e) {}
-
-        try {
-          for (var i = 0; i < win.frames.length; i++) {
-            disablePopups(win.frames[i]);
-          }
+          window.open = fakeWindowOpen;
+          window.alert = function() {};
+          window.confirm = function() { return true; };
+          window.prompt = function() { return null; };
         } catch(e) {}
       }
 
-      disablePopups(window);
-
-      // Prevent Page Visibility API & blur events from freezing video playback on window resize/fullscreen
-      try {
-        Object.defineProperty(document, 'hidden', {
-          get: function() { return false; },
-          configurable: true
-        });
-        Object.defineProperty(document, 'visibilityState', {
-          get: function() { return 'visible'; },
-          configurable: true
-        });
-      } catch(e) {}
-
-      try {
-        var suppressVisibilityEvent = function(e) {
-          if (e && (e.type === 'visibilitychange' || e.type === 'webkitvisibilitychange')) {
-            e.stopImmediatePropagation();
-          }
-        };
-        window.addEventListener('visibilitychange', suppressVisibilityEvent, true);
-        window.addEventListener('webkitvisibilitychange', suppressVisibilityEvent, true);
-      } catch(e) {}
+      disablePopups();
 
       function wakeAndResumeVideo() {
         try {
@@ -294,35 +253,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       }
       window.wakeAndResumeVideo = wakeAndResumeVideo;
 
-      // 2. Prevent iframes from redirecting top window
-      try {
-        if (window.self !== window.top) {
-          var fakeTop = new Proxy(window.self, {
-            get: function(target, prop) {
-              if (prop === 'location') {
-                return {
-                  get href() { return window.location.href; },
-                  set href(val) {},
-                  replace: function() {},
-                  assign: function() {},
-                  reload: function() {}
-                };
-              }
-              return target[prop];
-            },
-            set: function(target, prop, val) {
-              if (prop === 'location') return true;
-              target[prop] = val;
-              return true;
-            }
-          });
-
-          try { Object.defineProperty(window, 'top', { get: function() { return fakeTop; } }); } catch(e) {}
-          try { Object.defineProperty(window, 'parent', { get: function() { return fakeTop; } }); } catch(e) {}
-        }
-      } catch(e) {}
-
-      // 3. Intercept dynamic script tag creation for ad networks
+      // 2. Block dynamic <script src="..."> tags from known ad networks
       var adDomains = ['alwingulla', 'adsterra', 'monetag', 'propeller', 'exoclick', 'juicyads', 'hilltopads', 'popunder', 'syndication', 'highrevenuegate', 'profitcpm', 'disable-devtool', 'clickadilla', 'onclickads', 'popads', 'popcash', 'elina', 'fakecall'];
       try {
         var origCreateElement = Document.prototype.createElement;
@@ -415,14 +346,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         } catch(e) {}
       }
 
+      // Only SPECIFIC phrases here. Broad words like 'missed' or 'video call'
+      // matched normal player text and caused endless remove/re-add loops.
       function isFakeCallText(text) {
         if (!text) return false;
         var t = text.toLowerCase();
         var phrases = [
-          'missed video call', 'missed video calls', 'missed call', 'missed calls',
+          'missed video call', 'missed video calls',
           'join the video call', 'incoming call', 'has something to show',
-          'show to you', 'live cam', 'chat with', 'elina', 'video call',
-          'video calls', 'call from', 'wants to chat', 'private show', 'missed'
+          'live cam', 'wants to chat', 'private show'
         ];
         for (var i = 0; i < phrases.length; i++) {
           if (t.includes(phrases[i])) return true;
@@ -430,50 +362,38 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         return false;
       }
 
-      // Finds and removes fake video call / chat popup badges and floating overlays
+      // Finds and removes fake video call / chat popup badges.
+      // Only small elements are checked, and we use textContent (cheap).
       function removeFakeCallPopups() {
         try {
           if (!document.body) return;
 
-          function scanAndPurge(root) {
-            if (!root) return;
-            var elems = root.querySelectorAll('div, a, section, span, p, aside, header');
-            for (var i = 0; i < elems.length; i++) {
-              var el = elems[i];
-              var txt = (el.innerText || el.textContent || '').toLowerCase();
-              if (!txt || !isFakeCallText(txt)) continue;
+          var elems = document.body.querySelectorAll('div, a, section, aside');
+          for (var i = 0; i < elems.length; i++) {
+            var el = elems[i];
+            var txt = el.textContent || '';
 
-              // Walk up to find the topmost floating container box below body that doesn't contain the video
-              var box = el;
-              var topBox = el;
-              while (box && box !== document.body && box !== document.documentElement) {
-                if (box.querySelector && (box.querySelector('video') || box.querySelector('iframe[src*="vid"]') || box.querySelector('iframe[src*="embed"]'))) {
-                  break;
-                }
-                topBox = box;
-                box = box.parentElement;
-              }
+            // Real fake-call badges have short text. Skip big containers.
+            if (txt.length === 0 || txt.length > 200) continue;
+            if (!isFakeCallText(txt)) continue;
 
-              if (topBox && topBox !== document.body && topBox !== document.documentElement) {
-                if (!topBox.querySelector('video')) {
-                  topBox.style.setProperty('display', 'none', 'important');
-                  topBox.style.setProperty('visibility', 'hidden', 'important');
-                  topBox.style.setProperty('pointer-events', 'none', 'important');
-                  topBox.style.setProperty('opacity', '0', 'important');
-                  topBox.style.setProperty('position', 'absolute', 'important');
-                  topBox.style.setProperty('top', '-9999px', 'important');
-                  try { topBox.remove(); } catch(e) {}
-                }
-              }
+            // Never touch anything that holds the video.
+            if (el.querySelector('video')) continue;
+
+            // Walk up a few levels to find the whole popup box.
+            var topBox = el;
+            var parent = el.parentElement;
+            var levels = 0;
+            while (parent && parent !== document.body && parent !== document.documentElement && levels < 4) {
+              if (parent.querySelector('video') || parent.querySelector('iframe')) break;
+              if ((parent.textContent || '').length > 300) break;
+              topBox = parent;
+              parent = parent.parentElement;
+              levels++;
             }
-          }
 
-          scanAndPurge(document);
-
-          var allNodes = document.querySelectorAll('*');
-          for (var j = 0; j < allNodes.length; j++) {
-            if (allNodes[j].shadowRoot) {
-              scanAndPurge(allNodes[j].shadowRoot);
+            try { topBox.remove(); } catch(e) {
+              topBox.style.setProperty('display', 'none', 'important');
             }
           }
         } catch(e) {}
@@ -481,7 +401,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
 
       function removeFloatingAdOverlays() {
         try {
-          var elems = document.querySelectorAll('body > div, body > aside, body > section, div[style*="z-index"], a[target="_blank"]');
+          var elems = document.querySelectorAll('body > div, body > aside, body > section, a[target="_blank"]');
           for (var i = 0; i < elems.length; i++) {
             var el = elems[i];
 
@@ -493,19 +413,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
                 el.removeAttribute('target');
                 el.setAttribute('href', 'javascript:void(0)');
               }
+              continue;
             }
 
-            // Protect video player and controls from being removed
-            var hasMedia = el.querySelector('video, iframe[src*="embed"], iframe[src*="vid"], canvas');
+            // Protect the video player and its controls from being removed
+            var hasMedia = el.querySelector('video, iframe, canvas');
             if (hasMedia) continue;
 
             var isControls = el.querySelector('button, input, [class*="control"], [class*="player"], [class*="vidlink"], [class*="vjs"], [class*="jw"], [class*="plyr"]');
             if (isControls) continue;
 
-            var txt = (el.innerText || el.textContent || '').toLowerCase();
+            var txt = (el.textContent || '').toLowerCase();
+            if (txt.length > 300) continue;
+
             if (isFakeCallText(txt)) {
-              el.style.setProperty('display', 'none', 'important');
-              el.style.setProperty('pointer-events', 'none', 'important');
               try { el.remove(); } catch(e) {}
               continue;
             }
@@ -518,8 +439,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
                 var containsAdLink = el.querySelector('a[target="_blank"]');
                 var containsAdKeyword = adDomains.some(function(kw) { return txt.includes(kw); });
                 if (containsAdLink || containsAdKeyword) {
-                  el.style.setProperty('display', 'none', 'important');
-                  el.style.setProperty('pointer-events', 'none', 'important');
                   try { el.remove(); } catch(e) {}
                 }
               }
@@ -553,17 +472,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
             }
           }
         } catch(e) {}
-
-        try {
-          if (node.shadowRoot) {
-            var sElems = node.shadowRoot.querySelectorAll('*');
-            for (var i = 0; i < sElems.length; i++) purgeDomNode(sElems[i]);
-          }
-        } catch(e) {}
       }
 
       function purgeLoadersAndAds() {
-        disablePopups(window);
+        disablePopups();
         injectAdBlockStyles();
         removeFloatingAdOverlays();
         removeFakeCallPopups();
@@ -582,8 +494,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       try {
         var eventsToBlock = ['click', 'touchstart', 'touchend', 'pointerdown', 'mousedown'];
         var handleInteraction = function(e) {
-          disablePopups(window);
-          purgeLoadersAndAds();
+          disablePopups();
           var target = e.target;
           while (target && target !== document.body && target !== document.documentElement) {
             if (target.tagName === 'A') {
@@ -623,18 +534,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       injectAdBlockStyles();
       purgeLoadersAndAds();
 
-      // Run cleaning fast whenever page changes
+      // Run cleaning (at most every 400ms) when the page changes
       var _purgeTimeout = null;
       function schedulePurge() {
         if (_purgeTimeout) return;
         _purgeTimeout = setTimeout(function() {
           _purgeTimeout = null;
           purgeLoadersAndAds();
-        }, 200);
+        }, 400);
       }
 
-      // Fast periodic scan every 500ms
-      setInterval(purgeLoadersAndAds, 500);
+      // Slower periodic scan (was every 500ms, now every 2 seconds)
+      setInterval(purgeLoadersAndAds, 2000);
 
       try {
         var observer = new MutationObserver(function(mutations) {
@@ -707,18 +618,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   // Player URL + loading
   // -------------------------------------------------------------------------
 
+  // CHANGED: the URL is now built from the server's "style" field.
+  // (The old code checked the server NAME, e.g. contains('VidLink'), but the
+  // names were changed to "Server 1/2/3", so those checks never matched.)
   void _updatePlayerUrl() {
     final server = kServerOptions[_selectedServerIndex];
     String url;
-    if (server.name.contains('VidLink')) {
+
+    if (server.style == 'query') {
+      // Example: https://vidsrc.me/embed/movie?tmdb=123
+      url = widget.isTv
+          ? "${server.tvUrl}?tmdb=${widget.tmdbId}&season=$_currentSeason&episode=$_currentEpisode"
+          : "${server.movieUrl}?tmdb=${widget.tmdbId}";
+    } else if (server.style == 'vidlink') {
+      // Example: https://vidlink.pro/movie/123?primaryColor=E8894D
       url = widget.isTv
           ? "${server.tvUrl}/${widget.tmdbId}/$_currentSeason/$_currentEpisode?primaryColor=E8894D"
           : "${server.movieUrl}/${widget.tmdbId}?primaryColor=E8894D";
-    } else if (server.name == '2Embed') {
-      url = widget.isTv
-          ? "${server.tvUrl}/${widget.tmdbId}&s=$_currentSeason&e=$_currentEpisode"
-          : "${server.movieUrl}/${widget.tmdbId}";
     } else {
+      // 'path' style. Example: https://vidsrc.to/embed/movie/123
       url = widget.isTv
           ? "${server.tvUrl}/${widget.tmdbId}/$_currentSeason/$_currentEpisode"
           : "${server.movieUrl}/${widget.tmdbId}";
@@ -730,7 +648,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   }
 
   // Reload the webview with the current _playerUrl.
-  // (Replaces the old "if windows ... else ..." code that was repeated.)
   void _loadPlayerUrl() {
     _winController?.loadUrl(urlRequest: URLRequest(url: WebUri(_playerUrl)));
   }
@@ -927,6 +844,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
     return false;
   }
 
+  // CHANGED: moved out of the widget so we can turn it off on Windows.
+  // Blocks ad files before they download (Android only).
+  // Windows and iOS do not support this callback.
+  Future<WebResourceResponse?> _interceptRequest(
+      InAppWebViewController controller,
+      WebResourceRequest request,
+      ) async {
+    final url = request.url.toString().toLowerCase();
+
+    if (kAdNetworkKeywords.any((word) => url.contains(word))) {
+      debugPrint("Intercepted and blocked ad resource: $url");
+      return WebResourceResponse(
+        contentType: 'text/javascript',
+        data: Uint8List(0),
+      );
+    }
+
+    return null;
+  }
+
   // -------------------------------------------------------------------------
   // Windows only: pause / play when the window is minimized / restored
   // -------------------------------------------------------------------------
@@ -934,10 +871,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   @override
   void onWindowMinimize() {
     if (mounted && _isWindows) {
+      setState(() {
+        _isMinimized = true;
+      });
+      _winController?.pause();
       _winController?.evaluateJavascript(source: """
         (function() {
-          var vids = document.getElementsByTagName('video');
-          for (var i = 0; i < vids.length; i++) vids[i].pause();
+          function pauseAll(w) {
+            try {
+              var vids = w.document.querySelectorAll('video, audio');
+              for (var i = 0; i < vids.length; i++) vids[i].pause();
+            } catch(e) {}
+            try {
+              for (var i = 0; i < w.frames.length; i++) pauseAll(w.frames[i]);
+            } catch(e) {}
+          }
+          pauseAll(window);
         })();
       """);
     }
@@ -946,12 +895,27 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   @override
   void onWindowRestore() {
     if (mounted && _isWindows) {
+      setState(() {
+        _isMinimized = false;
+      });
+      _winController?.resume();
       _winController?.evaluateJavascript(source: """
         (function() {
-          var vids = document.getElementsByTagName('video');
-          for (var i = 0; i < vids.length; i++) vids[i].play();
+          function playAll(w) {
+            try {
+              var vids = w.document.querySelectorAll('video, audio');
+              for (var i = 0; i < vids.length; i++) {
+                if (vids[i].paused && vids[i].currentTime > 0) vids[i].play().catch(function(){});
+              }
+            } catch(e) {}
+            try {
+              for (var i = 0; i < w.frames.length; i++) playAll(w.frames[i]);
+            } catch(e) {}
+          }
+          playAll(window);
         })();
       """);
+      _triggerWebViewResize();
     }
   }
 
@@ -1045,6 +1009,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   }
 
   void _onMouseMoved() {
+    if (_isMinimized) return;
     if (!_showControls) {
       setState(() => _showControls = true);
     }
@@ -1381,20 +1346,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       initialUrlRequest: URLRequest(url: WebUri(_playerUrl)),
 
       // Inject the cleanup script into the page AND every iframe.
-      // This is the key fix for the vidsrc.to pop-up ad: the ad lives inside
-      // an iframe, and the old mobile webview could not reach it.
-      initialUserScripts: UnmodifiableListView([
-        UserScript(
-          source: _cleanupScript,
-          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-          forMainFrameOnly: false,
-        ),
-        UserScript(
-          source: _cleanupScript,
-          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
-          forMainFrameOnly: false,
-        ),
-      ]),
+      // CHANGED: it can be switched off with kEnableCleanupScript (top of file).
+      initialUserScripts: UnmodifiableListView(
+        kEnableCleanupScript
+            ? [
+          UserScript(
+            source: _cleanupScript,
+            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+            forMainFrameOnly: false,
+          ),
+          UserScript(
+            source: _cleanupScript,
+            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
+            forMainFrameOnly: false,
+          ),
+        ]
+            : <UserScript>[],
+      ),
 
       initialSettings: InAppWebViewSettings(
         userAgent: _userAgent,
@@ -1426,9 +1394,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
             _mobileSafetyTimer?.cancel();
           }
         });
-        // We no longer run the cleanup script here.
-        // This callback fires many times while loading, and re-running the
-        // script each time made the video slow to start.
       },
 
       onLoadStart: (controller, url) {
@@ -1443,7 +1408,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
             setState(() => isLoading = false);
           }
         });
-        controller.evaluateJavascript(source: _cleanupScript);
+        // CHANGED: we no longer call evaluateJavascript(_cleanupScript) here.
+        // The UserScripts above already inject it into every page and iframe.
       },
 
       onLoadStop: (controller, url) async {
@@ -1453,7 +1419,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
           _hasLoadedOnce = true;
         });
         _mobileSafetyTimer?.cancel();
-        await controller.evaluateJavascript(source: _cleanupScript);
+        // CHANGED: removed the extra cleanup script injection here too.
         await controller.evaluateJavascript(source: "document.body.style.backgroundColor = 'black';");
       },
 
@@ -1470,21 +1436,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         return false;
       },
 
-      // Block ad files before they download (Android and Windows).
-      // iOS does not support this callback.
-      shouldInterceptRequest: (controller, request) async {
-        final url = request.url.toString().toLowerCase();
-
-        if (kAdNetworkKeywords.any((word) => url.contains(word))) {
-          debugPrint("Intercepted and blocked ad resource: $url");
-          return WebResourceResponse(
-            contentType: 'text/javascript',
-            data: Uint8List(0),
-          );
-        }
-
-        return null;
+      // CHANGED: JS dialogs (alert/confirm/prompt) are answered right away,
+      // so the native side never sits waiting for a dialog nobody can see.
+      onJsAlert: (controller, jsAlertRequest) async {
+        return JsAlertResponse(handledByClient: true);
       },
+      onJsConfirm: (controller, jsConfirmRequest) async {
+        return JsConfirmResponse(handledByClient: true);
+      },
+      onJsPrompt: (controller, jsPromptRequest) async {
+        return JsPromptResponse(handledByClient: true);
+      },
+
+      // CHANGED: only used on Android. On Windows it is turned off (null),
+      // so we do not run Dart code for every single network request.
+      shouldInterceptRequest: _isWindows ? null : _interceptRequest,
 
       // Decide if the page may navigate to a new URL
       shouldOverrideUrlLoading: (controller, navigationAction) async {

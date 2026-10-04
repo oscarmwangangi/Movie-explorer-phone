@@ -255,6 +255,149 @@ class TMDBService {
     }
   }
 
+  /// Fetches TV Series Currently On The Air.
+  static Future<List> getOnTheAirTVSeries() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/tv/on_the_air?api_key=$apiKey&language=en-US&page=1");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load on the air TV series from TMDB.");
+    }
+  }
+
+  /// Fetches TV Series Airing Today.
+  static Future<List> getAiringTodayTVSeries() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/tv/airing_today?api_key=$apiKey&language=en-US&page=1");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load airing today TV series from TMDB.");
+    }
+  }
+
+  /// Fetches Action & Adventure TV Shows.
+  static Future<List> getActionAdventureTV() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/discover/tv?api_key=$apiKey&with_genres=10759");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load Action & Adventure TV shows.");
+    }
+  }
+
+  /// Fetches Sci-Fi & Fantasy TV Shows.
+  static Future<List> getSciFiFantasyTV() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/discover/tv?api_key=$apiKey&with_genres=10765");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load Sci-Fi & Fantasy TV shows.");
+    }
+  }
+
+  /// Fetches Crime & Mystery TV Shows.
+  static Future<List> getCrimeTV() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/discover/tv?api_key=$apiKey&with_genres=80,9648");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load Crime TV shows.");
+    }
+  }
+
+  /// Fetches Comedy TV Shows.
+  static Future<List> getComedyTV() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/discover/tv?api_key=$apiKey&with_genres=35");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load Comedy TV shows.");
+    }
+  }
+
+  /// Fetches Drama TV Shows.
+  static Future<List> getDramaTV() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/discover/tv?api_key=$apiKey&with_genres=18");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load Drama TV shows.");
+    }
+  }
+
+  /// Fetches Animated TV Series.
+  static Future<List> getAnimationTV() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/discover/tv?api_key=$apiKey&with_genres=16");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load Animated TV series.");
+    }
+  }
+
+  /// Fetches Comedy movies.
+  static Future<List> getComedyMovies() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/discover/movie?api_key=$apiKey&with_genres=35");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load comedy movies from TMDB.");
+    }
+  }
+
+  /// Fetches Thriller movies.
+  static Future<List> getThrillerMovies() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/discover/movie?api_key=$apiKey&with_genres=53,9648");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load thriller movies from TMDB.");
+    }
+  }
+
+  /// Fetches Adventure movies.
+  static Future<List> getAdventureMovies() async {
+    final url = Uri.parse(
+        "https://api.themoviedb.org/3/discover/movie?api_key=$apiKey&with_genres=12");
+    final response = await _get(url);
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return data["results"];
+    } else {
+      throw Exception("Failed to load adventure movies from TMDB.");
+    }
+  }
+
   /// Fetches where to watch the movie/TV (Streaming, Rent, Buy).
   static Future<Map<String, dynamic>> getWatchProviders(int id, {bool isTv = false}) async {
     final type = isTv ? 'tv' : 'movie';
@@ -331,10 +474,47 @@ class TMDBService {
         endpoint = "movie/upcoming";
         break;
       case 'tv series':
+      case 'popular tv shows':
+      case 'popular tv':
         endpoint = "tv/popular";
         break;
       case 'top rated tv':
+      case 'top rated tv series':
         endpoint = "tv/top_rated";
+        break;
+      case 'on the air':
+      case 'tv on the air':
+      case 'currently airing':
+        endpoint = "tv/on_the_air";
+        break;
+      case 'airing today':
+      case 'tv airing today':
+        endpoint = "tv/airing_today";
+        break;
+      case 'action & adventure tv':
+      case 'tv action & adventure':
+        endpoint = "discover/tv?with_genres=10759";
+        break;
+      case 'sci-fi & fantasy tv':
+      case 'tv sci-fi & fantasy':
+        endpoint = "discover/tv?with_genres=10765";
+        break;
+      case 'crime & mystery tv':
+      case 'tv crime':
+      case 'crime tv':
+        endpoint = "discover/tv?with_genres=80,9648";
+        break;
+      case 'comedy tv':
+      case 'tv comedy':
+        endpoint = "discover/tv?with_genres=35";
+        break;
+      case 'drama tv':
+      case 'tv drama':
+        endpoint = "discover/tv?with_genres=18";
+        break;
+      case 'animated tv series':
+      case 'tv animation':
+        endpoint = "discover/tv?with_genres=16";
         break;
       case 'action':
         endpoint = "discover/movie?with_genres=28";
@@ -344,6 +524,18 @@ class TMDBService {
         break;
       case 'horror':
         endpoint = "discover/movie?with_genres=27";
+        break;
+      case 'comedy':
+      case 'comedy movies':
+        endpoint = "discover/movie?with_genres=35";
+        break;
+      case 'thriller':
+      case 'thriller movies':
+        endpoint = "discover/movie?with_genres=53,9648";
+        break;
+      case 'adventure':
+      case 'adventure movies':
+        endpoint = "discover/movie?with_genres=12";
         break;
       case 'kids & animation':
         endpoint = "discover/movie?with_genres=16,10751";

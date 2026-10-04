@@ -51,6 +51,20 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_SIZE) {
+    if (wparam == SIZE_MINIMIZED) {
+      EnumChildWindows(hwnd, [](HWND c, LPARAM) -> BOOL {
+        ShowWindow(c, SW_HIDE);
+        return TRUE;
+      }, 0);
+    } else if (wparam == SIZE_RESTORED || wparam == SIZE_MAXIMIZED) {
+      EnumChildWindows(hwnd, [](HWND c, LPARAM) -> BOOL {
+        ShowWindow(c, SW_SHOW);
+        return TRUE;
+      }, 0);
+    }
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
