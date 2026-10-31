@@ -149,6 +149,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   bool _hasLoadedOnce = false;
   bool _isFullScreen = false;
   bool _isMinimized = false;
+
+  // Used to fix the black screen after minimize -> restore (Windows).
+  // We flip this value to change the webview size by 1 pixel for a moment.
+  // That forces WebView2 to draw itself again.
+  bool _repaintNudge = false;
+
+  // Right after the window is restored, the ad scripts wake up and try to
+  // redirect the main page. Until this time passes we refuse ALL main-page
+  // navigations, so nothing can reload the player (and cause a black screen).
+  DateTime _blockMainNavUntil = DateTime.fromMillisecondsSinceEpoch(0);
   bool _showControls = true;
   Timer? _hideTimer;
   Timer? _mobileSafetyTimer;
@@ -760,7 +770,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         await Directory(userDataFolder).create(recursive: true);
 
         _webViewEnvironment = await WebViewEnvironment.create(
-          settings: WebViewEnvironmentSettings(userDataFolder: userDataFolder),
+          settings: WebViewEnvironmentSettings(
+            userDataFolder: userDataFolder,
+            additionalBrowserArguments: kWebViewBrowserArgs, // see main.dart
+          ),
         );
 
         if (mounted) {
@@ -811,6 +824,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
 
     // Empty iframes are fine
     if (lower.startsWith("about:blank")) return true;
+
+    // 0. Just after minimize -> restore: no main-page navigation at all
+    if (isMainFrame && DateTime.now().isBefore(_blockMainNavUntil)) {
+      debugPrint("Blocking main-page navigation right after restore: $lower");
+      return false;
+    }
 
     // 1. Block anything that looks like an ad
     if (_looksLikeAd(lower)) {
@@ -869,13 +888,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   // -------------------------------------------------------------------------
 
   @override
-  void onWindowMinimize() {
+  void onWindowMinimize() async {
     if (mounted && _isWindows) {
       setState(() {
         _isMinimized = true;
       });
-      _winController?.pause();
-      _winController?.evaluateJavascript(source: """
+
+      // Step 1: pause the <video> tags (this needs the page to still be awake,
+      // so it must happen BEFORE we suspend the webview).
+      await _winController?.evaluateJavascript(source: """
         (function() {
           function pauseAll(w) {
             try {
@@ -889,15 +910,51 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
           pauseAll(window);
         })();
       """);
+
+      // Step 2: hide + suspend the webview (WebView2 IsVisible = false and
+      // TrySuspend). This is what stops the video layer from staying stuck on
+      // the screen (the frozen, unclickable area) after minimizing.
+      // The black screen on restore is handled by _forceWebViewRepaint().
+      await _winController?.pause();
+    }
+  }
+
+  // Windows does NOT always send "restore" when a FULL SCREEN window comes
+  // back from the taskbar (it can send "maximize" or just "focus" instead).
+  // If we miss it, the webview stays hidden (paused) = black screen.
+  // So we listen to ALL window events and wake up on any of the "came back"
+  // ones. The print helps you see which event Windows really sends.
+  @override
+  void onWindowEvent(String eventName) {
+    debugPrint("Window event: $eventName (minimized: $_isMinimized)");
+    const cameBackEvents = [
+      'restore',
+      'maximize',
+      'unmaximize',
+      'focus',
+      'enter-full-screen',
+      'leave-full-screen',
+    ];
+    if (_isMinimized && cameBackEvents.contains(eventName)) {
+      _wakeUpAfterMinimize();
     }
   }
 
   @override
   void onWindowRestore() {
-    if (mounted && _isWindows) {
+    _wakeUpAfterMinimize();
+  }
+
+  // Wakes the webview up. Safe to call many times: it only runs once per minimize.
+  void _wakeUpAfterMinimize() {
+    if (mounted && _isWindows && _isMinimized) {
       setState(() {
         _isMinimized = false;
       });
+      // Ignore every main-page redirect for the next 5 seconds (ad scripts).
+      _blockMainNavUntil = DateTime.now().add(const Duration(seconds: 5));
+
+      // Wake the webview up again (IsVisible = true and Resume).
       _winController?.resume();
       _winController?.evaluateJavascript(source: """
         (function() {
@@ -916,6 +973,42 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         })();
       """);
       _triggerWebViewResize();
+      _forceWebViewRepaint();
+    }
+  }
+
+  // Fixes the black screen after minimize -> restore in full screen.
+  // Windows sometimes forgets to draw the webview after the window comes back.
+  // We wait a little, re-apply full screen, then wiggle the size by 1px.
+  Future<void> _forceWebViewRepaint() async {
+    // In full screen the drawing surface comes back empty (black). Leaving and
+    // re-entering full screen once makes Windows rebuild it. In a small window
+    // this problem does not happen, so we only do it when in full screen.
+    if (_isFullScreen) {
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted || _isMinimized) return;
+      await windowManager.setFullScreen(false);
+      await Future.delayed(const Duration(milliseconds: 250));
+      if (!mounted || _isMinimized) return;
+      await windowManager.setFullScreen(true);
+    }
+
+    // Try a few times, because Windows may need some time to finish restoring.
+    for (final delay in const [150, 500, 1200]) {
+      await Future.delayed(Duration(milliseconds: delay));
+      if (!mounted || _isMinimized) return;
+
+      // Make sure the window really is in the full screen state we expect
+      if (_isFullScreen) {
+        final stillFull = await windowManager.isFullScreen();
+        if (!stillFull) await windowManager.setFullScreen(true);
+      }
+
+      // Wiggle: +1px, then back to normal one frame later
+      setState(() => _repaintNudge = true);
+      await Future.delayed(const Duration(milliseconds: 50));
+      if (!mounted) return;
+      setState(() => _repaintNudge = false);
     }
   }
 
@@ -1491,7 +1584,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
           onHover: (_) => _onMouseMoved(),
           child: Stack(
             children: [
-              _buildInAppWebView(),
+              Padding(
+                padding: EdgeInsets.only(right: _repaintNudge ? 1 : 0),
+                child: _buildInAppWebView(),
+              ),
               if (isLoading && !_hasLoadedOnce) _buildLoadingOverlay(),
               // Floating exit button for Full Screen
               if (_isFullScreen && _showControls)

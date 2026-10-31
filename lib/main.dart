@@ -21,6 +21,21 @@ import 'package:movie_explorer/reusable/subscription_gate.dart';
 // Global webview environment to prevent re-initialization freezes
 WebViewEnvironment? globalWebViewEnvironment;
 
+// Extra Chromium flags for the Windows WebView2 player.
+// They fix the "frozen / unclickable area" after minimizing while a movie plays:
+//  - CalculateNativeWinOcclusion: stops Chromium from guessing that the window
+//    is hidden and freezing its drawing surface.
+//  - disable-direct-composition-video-overlays: the video is drawn by the
+//    normal compositor instead of a special hardware layer. That hardware
+//    layer is what stayed "stuck" on screen after minimize.
+//  - the two "disable-backgrounding" flags keep the page from being
+//    half-suspended while the window is minimized.
+const String kWebViewBrowserArgs =
+    '--disable-features=CalculateNativeWinOcclusion '
+    '--disable-direct-composition-video-overlays '
+    '--disable-backgrounding-occluded-windows '
+    '--disable-renderer-backgrounding';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: ".env");
@@ -38,9 +53,12 @@ void main() async {
         final dir = await getApplicationSupportDirectory();
         final userDataFolder = '${dir.path}\\webview_data';
         await Directory(userDataFolder).create(recursive: true);
-        
+
         globalWebViewEnvironment = await WebViewEnvironment.create(
-          settings: WebViewEnvironmentSettings(userDataFolder: userDataFolder),
+          settings: WebViewEnvironmentSettings(
+            userDataFolder: userDataFolder,
+            additionalBrowserArguments: kWebViewBrowserArgs,
+          ),
         );
       } catch (e) {
         debugPrint("Failed to init WebView environment: $e");
@@ -54,7 +72,7 @@ void main() async {
       skipTaskbar: false,
       titleBarStyle: TitleBarStyle.normal,
     );
-    
+
     windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.show();
       await windowManager.focus();
