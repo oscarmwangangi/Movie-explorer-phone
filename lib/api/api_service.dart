@@ -174,8 +174,12 @@ class ApiService {
 
     final data = jsonDecode(response.body);
 
+    if (response.statusCode == 429) {
+      throw Exception('Too many requests. Please wait a few seconds and try again.');
+    }
+
     if (response.statusCode != 200) {
-      throw Exception(data['error'] ?? 'Could not start the payment.');
+      throw Exception(data['error'] ?? data['message'] ?? 'Could not start the payment.');
     }
 
     return data['checkoutRequestId'];
@@ -198,10 +202,15 @@ class ApiService {
       throw Exception('Network error while checking the payment.');
     }
 
+    if (response.statusCode == 429) {
+      // Rate limited during polling: stay in PENDING state gracefully
+      return {'status': 'PENDING', 'message': 'Checking payment status...'};
+    }
+
     final data = jsonDecode(response.body);
 
     if (response.statusCode != 200) {
-      throw Exception((data is Map ? data['error'] : null) ?? 'Could not check the payment.');
+      throw Exception((data is Map ? (data['error'] ?? data['message']) : null) ?? 'Could not check the payment.');
     }
 
     return Map<String, dynamic>.from(data);
@@ -216,10 +225,15 @@ class ApiService {
         headers: await _authHeaders(),
       ).timeout(const Duration(seconds: 10));
 
+      if (response.statusCode == 429) {
+        // Rate limited: fail gracefully without breaking state
+        return {};
+      }
+
       final data = jsonDecode(response.body);
 
       if (response.statusCode != 200) {
-        final errorMessage = (data is Map) ? data['error'] : null;
+        final errorMessage = (data is Map) ? (data['error'] ?? data['message']) : null;
         throw Exception(errorMessage ?? 'Failed to check subscription');
       }
 

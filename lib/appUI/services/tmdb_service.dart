@@ -7,8 +7,14 @@ class TMDBService {
   /// The API key required for authenticating with TMDB, now loaded from .env.
   static String get apiKey => dotenv.env['TMDB_API_KEY'] ?? "";
 
-  static Future<http.Response> _get(Uri url) {
-    return http.get(url).timeout(const Duration(seconds: 10));
+  static Future<http.Response> _get(Uri url) async {
+    http.Response response = await http.get(url).timeout(const Duration(seconds: 10));
+    if (response.statusCode == 429) {
+      // Too many requests: wait 1.2 seconds and retry automatically
+      await Future.delayed(const Duration(milliseconds: 1200));
+      response = await http.get(url).timeout(const Duration(seconds: 10));
+    }
+    return response;
   }
 
   /// Searches for movies on TMDB based on the provided [query].

@@ -50,26 +50,31 @@ class ServerOption {
 }
 
 final List<ServerOption> kServerOptions = [
+
   const ServerOption(
-    name: 'Server 1',
+    name: 'Server 1 (VidSrc Fast)',
     movieUrl: 'https://vidsrc.to/embed/movie',
     tvUrl: 'https://vidsrc.to/embed/tv',
     style: 'path',
   ),
-  // CHANGED: Server 2 is vidsrc.me (it was vidsrc.sh before).
-  // vidsrc.me uses query-style URLs: /embed/movie?tmdb=ID
-  // const ServerOption(
-  //   name: 'Server 2',
-  //   movieUrl: 'https://vidsrc.me/embed/movie',
-  //   tvUrl: 'https://vidsrc.me/embed/tv',
-  //   style: 'query',
-  // ),
   const ServerOption(
-    name: 'Server 3 (Ad-Free) HD',
+    name: 'Server 2 (VidLink HD - Ad Free)',
     movieUrl: 'https://vidlink.pro/movie',
     tvUrl: 'https://vidlink.pro/tv',
     style: 'vidlink',
   ),
+  // const ServerOption(
+  //   name: 'Server 3 (EmbedSu Backup)',
+  //   movieUrl: 'https://embed.su/embed/movie',
+  //   tvUrl: 'https://embed.su/embed/tv',
+  //   style: 'path',
+  // ),
+  // const ServerOption(
+  //   name: 'Server 4 (VidSrc CC Mirror)',
+  //   movieUrl: 'https://vidsrc.cc/v2/embed/movie',
+  //   tvUrl: 'https://vidsrc.cc/v2/embed/tv',
+  //   style: 'path',
+  // ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -83,12 +88,26 @@ const List<String> kAdNetworkKeywords = [
   "juicyads", "hilltopads", "syndication", "doubleclick", "popunder",
   "popads", "popcash", "highrevenuegate", "profitcpm", "onclickads",
   "clickadilla", "trafficjunky", "zedo", "outbrain", "taboola",
-  "bet365", "1xbet", "casino",
+  "bet365", "1xbet", "casino", "adcash", "browserpro", "opera",
+  "adservice", "adsystem", "leadback", "clicktrack", "pop-up",
+  "redirect", "promo-", "track-", "geo.opera", "whos.amung.us",
+  "addthis", "histats", "statcounter", "adnium", "adbuffs",
+  "admafia", "adversal", "bidvertiser", "infolinks", "popmyads",
+  "revenuehits", "shorte.st", "skimlinks", "sovrn", "yllix",
+  "chitika", "cpmstar", "flyout", "vnative", "adity", "m25.5",
+  "adform", "adroll", "smartadserver", "yieldmo", "rubiconproject",
+  "pubmatic", "openx", "indexexchange", "criteo", "amazon-adsystem",
+  "betting", "gambling", "poker", "slots", "dating", "adult",
+  "disruptive", "fizzymedia", "creativeminds", "desu.sh", "asg.vidsrc",
+  "clickaround", "directrev", "ad-delivery", "fastclick", "gamez",
+  "betway", "1win", "melbet", "mostbet", "pin-up", "parimatch", "stake",
+  "bc.game", "interlinecustomroofingllc", "roofingllc", "roofing", "interline",
 ];
 
 // URL paths that are almost always ads / popups.
 const List<String> kAdUrlPaths = [
   "/popup", "/popunder", "/ads/", "/ad/", "/clk", "/out/",
+  "/promo", "/click", "/redirect", "/direct/", "/link/", "/pop/",
 ];
 
 // Domains the player is allowed to load from.
@@ -101,9 +120,12 @@ const List<String> kAllowedDomains = [
   "movie-api", "mcloud", "filemoon", "streamtape", "embed.su", "embedsu",
   "vidlink", "superstream", "google.com", "gstatic.com", "cloudflare",
   "hcaptcha", "recaptcha", "smashystream", "vidsrc.cc", "vidsrc.icu",
-  // CHANGED: extra domains that vidsrc.me redirects to / loads from.
   "vidsrc.me", "vidsrc.net", "vidsrc.xyz", "vidsrcme", "vidsrc-embed",
-  "cloudnestra",
+  "cloudnestra", "vidsrc.to", "vidsrc.pm", "vidsrc.in", "vidsrc.stream",
+  "rcstream", "vid2src", "vidsrc.pro", "vidbinge", "vidsrc2.to", "vidsrc.vip",
+  "vid2v1", "vidsrc.io", "vidsrc.dev", "autoembed.cc", "autoembed.co",
+  "multiembed.mov", "2embed.cc", "2embed.skin", "napi.vidsrc.stream",
+  "10015.io", "jsdelivr.net", "cdnjs.cloudflare.com", "unpkg.com",
 ];
 
 // ---------------------------------------------------------------------------
@@ -201,39 +223,73 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   //    matched normal player text and caused remove -> re-add -> remove loops.
   //  - Removed the shadow-root scan of every element on the page.
   //  - The periodic scan runs every 2 seconds instead of every 0.5 seconds.
+  //
+  // NEW: removeAdLeftovers() removes the black box an ad leaves behind
+  //      (small ad iframes + empty dark boxes).
   static const String _cleanupScript = r"""
     (function() {
       if (window.__cleanupInstalled) return;
       window.__cleanupInstalled = true;
 
-      // 1. Fake window object for popups
-      var dummyWindow = {
-        closed: false,
-        focus: function() {},
-        blur: function() {},
-        close: function() { this.closed = true; },
-        postMessage: function() {},
-        location: {
-          href: 'about:blank',
-          replace: function() {},
-          assign: function() {},
-          reload: function() {}
-        },
-        document: {
-          write: function() {},
-          writeln: function() {},
-          open: function() {},
-          close: function() {}
-        }
-      };
+      // 0. Prevent ad scripts from detecting window minimize / restore / tab focus change
+      try {
+        Object.defineProperty(document, 'hidden', { get: function() { return false; }, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { get: function() { return 'visible'; }, configurable: true });
+        Object.defineProperty(document, 'webkitHidden', { get: function() { return false; }, configurable: true });
+      } catch(e) {}
 
-      function fakeWindowOpen() {
-        return dummyWindow;
+      // 1. Fake window object for popups
+      function createDummyWindow() {
+        return {
+          closed: false,
+          focus: function() {},
+          blur: function() {},
+          close: function() { this.closed = true; },
+          postMessage: function() {},
+          location: {
+            href: 'about:blank',
+            replace: function() {},
+            assign: function() {},
+            reload: function() {}
+          },
+          document: {
+            write: function() {},
+            writeln: function() {},
+            open: function() {},
+            close: function() {}
+          }
+        };
+      }
+
+      function lockWindowOpen(targetObj) {
+        if (!targetObj) return;
+        try {
+          var dummyFn = function() { return createDummyWindow(); };
+          Object.defineProperty(targetObj, 'open', {
+            get: function() { return dummyFn; },
+            set: function() {},
+            configurable: true
+          });
+        } catch(e) {
+          try { targetObj.open = function() { return createDummyWindow(); }; } catch(ex) {}
+        }
       }
 
       function disablePopups() {
         try {
-          window.open = fakeWindowOpen;
+          lockWindowOpen(window);
+          if (window.self !== window.top) {
+            try { lockWindowOpen(window.top); } catch(e) {}
+          }
+          if (window.parent) {
+            try { lockWindowOpen(window.parent); } catch(e) {}
+          }
+          try {
+            for (var i = 0; i < window.frames.length; i++) {
+              lockWindowOpen(window.frames[i]);
+            }
+          } catch(e) {}
+
           window.alert = function() {};
           window.confirm = function() { return true; };
           window.prompt = function() { return null; };
@@ -241,6 +297,43 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       }
 
       disablePopups();
+
+      // Override setAttribute to strip target="_blank"
+      try {
+        var origSetAttr = HTMLAnchorElement.prototype.setAttribute;
+        HTMLAnchorElement.prototype.setAttribute = function(name, val) {
+          if (name && typeof name === 'string' && name.toLowerCase() === 'target' && val === '_blank') {
+            return origSetAttr.call(this, name, '_self');
+          }
+          return origSetAttr.apply(this, arguments);
+        };
+      } catch(e) {}
+
+      // Override Location assign, replace & href setter
+      try {
+        var origAssign = Location.prototype.assign;
+        Location.prototype.assign = function(url) {
+          if (url && !isAllowedUrl(url.toString())) return;
+          return origAssign.apply(this, arguments);
+        };
+        var origReplace = Location.prototype.replace;
+        Location.prototype.replace = function(url) {
+          if (url && !isAllowedUrl(url.toString())) return;
+          return origReplace.apply(this, arguments);
+        };
+        var hrefDesc = Object.getOwnPropertyDescriptor(Location.prototype, 'href');
+        if (hrefDesc && hrefDesc.set) {
+          var origSetHref = hrefDesc.set;
+          Object.defineProperty(Location.prototype, 'href', {
+            set: function(url) {
+              if (url && !isAllowedUrl(url.toString())) return;
+              return origSetHref.call(this, url);
+            },
+            get: hrefDesc.get,
+            configurable: true
+          });
+        }
+      } catch(e) {}
 
       function wakeAndResumeVideo() {
         try {
@@ -264,41 +357,84 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       window.wakeAndResumeVideo = wakeAndResumeVideo;
 
       // 2. Block dynamic <script src="..."> tags from known ad networks
-      var adDomains = ['alwingulla', 'adsterra', 'monetag', 'propeller', 'exoclick', 'juicyads', 'hilltopads', 'popunder', 'syndication', 'highrevenuegate', 'profitcpm', 'disable-devtool', 'clickadilla', 'onclickads', 'popads', 'popcash', 'elina', 'fakecall'];
+      var adDomains = [
+        'alwingulla', 'adsterra', 'monetag', 'propeller', 'exoclick', 'juicyads',
+        'hilltopads', 'popunder', 'syndication', 'highrevenuegate', 'profitcpm',
+        'disable-devtool', 'clickadilla', 'onclickads', 'popads', 'popcash',
+        'elina', 'fakecall', 'adcash', 'browserpro', 'opera', 'bet365', '1xbet',
+        'adservice', 'adsystem', 'leadback', 'clicktrack', 'whos.amung.us',
+        'addthis', 'histats', 'statcounter', 'adnium', 'admafia', 'bidvertiser',
+        'disruptive', 'fizzymedia', 'creativeminds', 'desu.sh', 'asg.vidsrc',
+        'interlinecustomroofingllc', 'roofingllc', 'roofing', 'interline'
+      ];
       try {
         var origCreateElement = Document.prototype.createElement;
         Document.prototype.createElement = function(tagName) {
           var el = origCreateElement.apply(this, arguments);
-          if (tagName && typeof tagName === 'string' && tagName.toLowerCase() === 'script') {
-            var origSetAttribute = el.setAttribute;
-            el.setAttribute = function(name, value) {
-              if (name === 'src' && typeof value === 'string') {
-                var valLower = value.toLowerCase();
-                for (var i = 0; i < adDomains.length; i++) {
-                  if (valLower.includes(adDomains[i])) return;
+          if (tagName && typeof tagName === 'string') {
+            var tLower = tagName.toLowerCase();
+            if (tLower === 'script') {
+              var origSetAttribute = el.setAttribute;
+              el.setAttribute = function(name, value) {
+                if (name === 'src' && typeof value === 'string') {
+                  var valLower = value.toLowerCase();
+                  for (var i = 0; i < adDomains.length; i++) {
+                    if (valLower.includes(adDomains[i])) return;
+                  }
                 }
-              }
-              return origSetAttribute.apply(this, arguments);
-            };
+                return origSetAttribute.apply(this, arguments);
+              };
+            } else if (tLower === 'iframe') {
+              setTimeout(function() {
+                try {
+                  if (el.contentWindow) lockWindowOpen(el.contentWindow);
+                } catch(err) {}
+              }, 10);
+            } else if (tLower === 'a') {
+              var origSetAttributeA = el.setAttribute;
+              el.setAttribute = function(name, value) {
+                if (name === 'target' && value === '_blank') {
+                  return origSetAttributeA.call(this, name, '_self');
+                }
+                return origSetAttributeA.apply(this, arguments);
+              };
+            }
           }
           return el;
         };
       } catch(e) {}
 
       function isAllowedUrl(href) {
-        var h = (href || '').toLowerCase();
-        if (h.includes('/pop') || h.includes('/ad') || h.includes('/clk') || h.includes('/out/') || h.includes('redirect') || h.includes('/promo') || h.includes('/click') || h.includes('adsterra') || h.includes('monetag')) {
+        if (!href) return true;
+        var h = href.toLowerCase();
+        if (h.startsWith('javascript:') || h.startsWith('about:blank') || h.startsWith('#') || h.startsWith('/')) return true;
+
+        for (var i = 0; i < adDomains.length; i++) {
+          if (h.includes(adDomains[i])) return false;
+        }
+
+        if (h.includes('/pop') || h.includes('/ad') || h.includes('/clk') || h.includes('/out/') ||
+            h.includes('redirect') || h.includes('/promo') || h.includes('/click')) {
           return false;
         }
-        return h.includes('vidlink') || h.includes('vidsrc') || h.includes('vsembed') ||
-               h.includes('2embed') || h.includes('autoembed') || h.includes('vidplay') ||
-               h.includes('megacloud') || h.includes('embed.su') || h.includes('embedsu') ||
-               h.includes('cloudorchestranova') || h.includes('orchestranova') ||
-               h.includes('cloudnest') || h.includes('shadowland') || h.includes('vizcloud') ||
-               h.includes('rabbitstream') || h.includes('movie-api') || h.includes('mcloud') ||
-               h.includes('filemoon') || h.includes('streamtape') || h.includes('superstream') ||
-               h.includes('google') || h.includes('cloudflare') || h.includes('smashystream') ||
-               h.startsWith('/') || h.startsWith('#') || h === '';
+
+        try {
+          var parsed = new URL(href, window.location.origin);
+          var host = parsed.hostname.toLowerCase();
+          var allowedHostKeywords = [
+            'vidlink', 'vidsrc', 'vsembed', '2embed', 'autoembed', 'vidplay',
+            'megacloud', 'embed.su', 'embedsu', 'cloudorchestranova', 'orchestranova',
+            'cloudnest', 'shadowland', 'vizcloud', 'rabbitstream', 'movie-api', 'mcloud',
+            'filemoon', 'streamtape', 'superstream', 'google', 'cloudflare', 'smashystream',
+            'rcstream', 'vid2src', 'vidbinge', 'vidsrc2', 'vidsrcme'
+          ];
+          for (var j = 0; j < allowedHostKeywords.length; j++) {
+            if (host.includes(allowedHostKeywords[j])) return true;
+          }
+          return false;
+        } catch(e) {
+          return false;
+        }
       }
 
       // Hide common ad containers with CSS.
@@ -318,7 +454,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
           var style = document.createElement('style');
           style.id = 'app-loader-override-style';
           style.innerHTML = `
-            html, body, #app, #root, div[id*="player"], div[class*="player"], div[class*="vidlink"] {
+            html, body, #app, #root, #player, .player, #jwplayer, .jwplayer, .video-js, #vidsrc-player, .vidsrc-player, #embed-player, .plyr, div[class*="vidlink"] {
               width: 100% !important;
               height: 100% !important;
               margin: 0 !important;
@@ -344,7 +480,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
             #pop, .popunder, .popup, #popup, div[class*="popunder"], div[class*="popup"],
             div[class*="fake-call"], div[class*="pop-call"], div[class*="elina"],
             div[class*="missed-call"], div[class*="avatar-popup"], div[class*="toast-call"],
+            div[class*="notification"], div[id*="notification"],
+            div[class*="notice"], div[id*="notice"],
+            div[class*="toast"], div[id*="toast"],
             [id*="fake-call"], [id*="pop-call"], [id*="elina"], [class*="video-call"],
+            div[class*="push"], div[id*="push"], div[class*="widget"], div[id*="widget"],
+            div[class*="corner"], div[id*="corner"], div[class*="sticky"], div[id*="sticky"],
+            div[class*="float"], div[id*="float"], div[class*="bottom-right"], div[id*="bottom-right"],
+            div[class*="vdo"], div[id*="vdo"], div[class*="outstream"], div[id*="outstream"],
+            div[class*="companion"], div[id*="companion"], div[class*="vast"], div[id*="vast"],
             a[target="_blank"] {
               display: none !important;
               visibility: hidden !important;
@@ -356,15 +500,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         } catch(e) {}
       }
 
-      // Only SPECIFIC phrases here. Broad words like 'missed' or 'video call'
-      // matched normal player text and caused endless remove/re-add loops.
-      function isFakeCallText(text) {
+      function isAdOrFakePopupText(text) {
         if (!text) return false;
         var t = text.toLowerCase();
         var phrases = [
           'missed video call', 'missed video calls',
           'join the video call', 'incoming call', 'has something to show',
-          'live cam', 'wants to chat', 'private show'
+          'live cam', 'wants to chat', 'private show',
+          'new message', 'premium account', 'account is activated',
+          'follow the instruction', 'instruction on the next page',
+          'next page to proceed', 'update required', 'virus detected',
+          'system alert', 'vpn recommended', 'security warning',
+          'verify you are human', 'click allow', 'press allow',
+          'allow notifications', 'claim your prize', 'spin to win',
+          'congratulations', 'your device is infected', 'battery damaged'
         ];
         for (var i = 0; i < phrases.length; i++) {
           if (t.includes(phrases[i])) return true;
@@ -372,38 +521,360 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         return false;
       }
 
-      // Finds and removes fake video call / chat popup badges.
-      // Only small elements are checked, and we use textContent (cheap).
+      // NEW: returns true if this element is part of the player's OWN controls
+      // (progress bar, seek bar, volume slider, time text, buttons...).
+      // The cleanup functions call this so they never delete the controls.
+      function isPlayerControl(el) {
+        try {
+          var words = ['progress', 'seek', 'slider', 'timeline', 'scrub', 'range',
+                       'buffer', 'played', 'thumb', 'knob', 'control', 'volume',
+                       'vjs', 'jw', 'plyr'];
+          var node = el;
+          var depth = 0;
+          // Check the element and up to 3 parents
+          while (node && node !== document.body && depth < 4) {
+            var cn = node.className;
+            if (cn && cn.baseVal !== undefined) cn = cn.baseVal; // svg elements
+            var c = ((cn || '') + ' ' + (node.id || '')).toString().toLowerCase();
+            for (var w = 0; w < words.length; w++) {
+              if (c.indexOf(words[w]) !== -1) return true;
+            }
+            var role = node.getAttribute ? (node.getAttribute('role') || '') : '';
+            if (role === 'slider' || role === 'progressbar') return true;
+            node = node.parentElement;
+            depth++;
+          }
+          // Or it CONTAINS a slider
+          if (el.querySelector && el.querySelector('input[type="range"], [role="slider"], [role="progressbar"], progress')) {
+            return true;
+          }
+        } catch (e) {}
+        return false;
+      }
+
+      // Finds and removes fake video call / chat / system message / notification cards.
       function removeFakeCallPopups() {
         try {
           if (!document.body) return;
 
-          var elems = document.body.querySelectorAll('div, a, section, aside');
+          var elems = document.body.querySelectorAll('div, a, section, aside, form, dialog, p, span, header, footer');
           for (var i = 0; i < elems.length; i++) {
             var el = elems[i];
-            var txt = el.textContent || '';
 
-            // Real fake-call badges have short text. Skip big containers.
-            if (txt.length === 0 || txt.length > 200) continue;
-            if (!isFakeCallText(txt)) continue;
+            // Never touch anything that holds or is the video or main iframe player.
+            if (el.tagName === 'VIDEO' || el.tagName === 'IFRAME' || el.querySelector('video, iframe')) continue;
 
-            // Never touch anything that holds the video.
-            if (el.querySelector('video')) continue;
+            var txt = (el.textContent || '').trim();
 
-            // Walk up a few levels to find the whole popup box.
-            var topBox = el;
-            var parent = el.parentElement;
-            var levels = 0;
-            while (parent && parent !== document.body && parent !== document.documentElement && levels < 4) {
-              if (parent.querySelector('video') || parent.querySelector('iframe')) break;
-              if ((parent.textContent || '').length > 300) break;
-              topBox = parent;
-              parent = parent.parentElement;
-              levels++;
+            if (txt.length > 0 && txt.length <= 400 && isAdOrFakePopupText(txt)) {
+              // Walk up a few levels to find the whole popup card container.
+              var topBox = el;
+              var parent = el.parentElement;
+              var levels = 0;
+              while (parent && parent !== document.body && parent !== document.documentElement && levels < 8) {
+                if (parent.querySelector('video, iframe')) break;
+                if ((parent.textContent || '').length > 800) break;
+                topBox = parent;
+                parent = parent.parentElement;
+                levels++;
+              }
+
+              try {
+                topBox.style.setProperty('display', 'none', 'important');
+                topBox.style.setProperty('visibility', 'hidden', 'important');
+                topBox.style.setProperty('pointer-events', 'none', 'important');
+                topBox.remove();
+              } catch(e) {}
+              continue;
             }
 
-            try { topBox.remove(); } catch(e) {
-              topBox.style.setProperty('display', 'none', 'important');
+            // Check if element contains an anchor linking to a non-allowed domain (like interlinecustomroofingllc)
+            var link = el.querySelector('a') || (el.tagName === 'A' ? el : null);
+            if (link) {
+              var href = (link.getAttribute('href') || link.href || '').toLowerCase();
+              if (href.startsWith('http') && !isAllowedUrl(href)) {
+                try {
+                  el.style.setProperty('display', 'none', 'important');
+                  el.style.setProperty('pointer-events', 'none', 'important');
+                  el.remove();
+                } catch(e) {}
+              }
+            }
+          }
+        } catch(e) {}
+      }
+
+      // Finds and destroys leftover empty / dark / black wrapper boxes left behind by popups or ads
+      function removeLeftoverBlackBoxes() {
+        try {
+          if (!document.body) return;
+          var elems = document.body.querySelectorAll('div, section, aside, form, dialog, p, span, header, footer');
+          for (var i = 0; i < elems.length; i++) {
+            var el = elems[i];
+
+            // Protect video, iframe, canvas, and active main player media
+            if (el.tagName === 'VIDEO' || el.tagName === 'IFRAME') continue;
+            if (el.querySelector('video, iframe, canvas')) continue;
+
+            // Protect standard interactive control buttons & sliders
+            if (el.querySelector('button, input, select, svg, path')) continue;
+
+            if (isPlayerControl(el)) continue;
+
+            // Protect ONLY official player control bar containers (like video.js or jwplayer control bars)
+            var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
+            if (cls.includes('vjs-control-bar') || cls.includes('jw-controlbar') || cls.includes('plyr__controls')) {
+              continue;
+            }
+
+            var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+            if (!style) continue;
+
+            var pos = style.position;
+            var isPositioned = (pos === 'fixed' || pos === 'absolute' || pos === 'relative');
+
+            var txt = (el.textContent || '').trim();
+
+            // Check if all child nodes are hidden or removed
+            var hasNoVisibleChildren = true;
+            var children = el.children;
+            if (children.length > 0) {
+              for (var c = 0; c < children.length; c++) {
+                var chStyle = window.getComputedStyle(children[c]);
+                if (chStyle && chStyle.display !== 'none' && chStyle.visibility !== 'hidden' && parseFloat(chStyle.opacity) > 0) {
+                  hasNoVisibleChildren = false;
+                  break;
+                }
+              }
+            }
+
+            var rect = el.getBoundingClientRect();
+            var hasSize = rect.width > 20 && rect.height > 20;
+
+            var bg = (style.backgroundColor || style.background || '').toLowerCase();
+            var isDarkOrBlack = bg.includes('black') || bg.includes('#000') || bg.includes('rgb(0, 0, 0)') ||
+                                bg.includes('rgba(0, 0, 0') || bg.includes('rgb(1') || bg.includes('rgb(2') ||
+                                bg.includes('rgb(10') || bg.includes('rgb(20') || bg.includes('rgb(30') ||
+                                bg.includes('rgb(15') || bg.includes('rgb(25');
+
+            // If it's a container with no media, buttons, or svg icons:
+            // Remove if it's empty / has hidden children / matches ad phrases / or is a dark/black box with < 50 chars text
+            if (isPositioned || hasSize) {
+              if (txt.length === 0 || hasNoVisibleChildren || isAdOrFakePopupText(txt) || (isDarkOrBlack && txt.length < 50)) {
+                try {
+                  el.style.setProperty('display', 'none', 'important');
+                  el.style.setProperty('visibility', 'hidden', 'important');
+                  el.style.setProperty('pointer-events', 'none', 'important');
+                  el.remove();
+                } catch(e) {}
+              }
+            }
+          }
+        } catch(e) {}
+      }
+
+      // NEW: Removes the black box an ad leaves behind.
+      // PART A removes small iframes (the ad frames).
+      // PART B removes empty dark boxes with no text and at most a close button.
+      function removeAdLeftovers() {
+        try {
+          if (!document.body) return;
+          var wW = window.innerWidth || 300;
+          var wH = window.innerHeight || 300;
+
+          // PART A: any iframe that is NOT the big main player is an ad frame
+          var frames = document.querySelectorAll('iframe');
+          for (var i = 0; i < frames.length; i++) {
+            var f = frames[i];
+            var r = f.getBoundingClientRect();
+            var isBigPlayer = r.width > wW * 0.7 && r.height > wH * 0.7;
+            if (isBigPlayer) continue;
+
+            var src = (f.getAttribute('src') || '').toLowerCase();
+            if (src.includes('hcaptcha') || src.includes('recaptcha')) continue;
+
+            try { f.remove(); } catch (e) {}
+          }
+
+          // PART B: empty dark boxes floating over the page
+          var boxes = document.body.querySelectorAll('div, section, aside, a, span');
+          for (var j = 0; j < boxes.length; j++) {
+            var el = boxes[j];
+
+            // Never touch anything that holds the video
+            if (el.querySelector('video, canvas, iframe')) continue;
+
+            if (isPlayerControl(el)) continue;
+
+            // Never touch player control bars
+            var cls = ((el.className || '') + ' ' + (el.id || '')).toString().toLowerCase();
+            if (cls.includes('vjs') || cls.includes('jw') || cls.includes('plyr') || cls.includes('control')) continue;
+
+            var style = window.getComputedStyle(el);
+            if (style.position !== 'fixed' && style.position !== 'absolute') continue;
+
+            var rect = el.getBoundingClientRect();
+            if (rect.width < 40 || rect.height < 40) continue;
+            if (rect.width > wW * 0.9 && rect.height > wH * 0.9) continue; // full screen layer
+
+            // Skip the middle of the screen (the player's big play button lives there)
+            var cx = rect.left + rect.width / 2;
+            var cy = rect.top + rect.height / 2;
+            if (cx > wW * 0.3 && cx < wW * 0.7 && cy > wH * 0.3 && cy < wH * 0.7) continue;
+
+            // Is the background dark? (reads rgb / rgba values)
+            var m = (style.backgroundColor || '').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+            if (!m) continue;
+            var alpha = m[4] === undefined ? 1 : parseFloat(m[4]);
+            var isDark = alpha > 0.5 && +m[1] < 40 && +m[2] < 40 && +m[3] < 40;
+            if (!isDark) continue;
+
+            // Only remove if it has no text and at most a close button
+            var hasText = (el.textContent || '').trim().length > 0;
+            var iconCount = el.querySelectorAll('button, svg, input').length;
+            if (!hasText && iconCount <= 2) {
+              try { el.remove(); } catch (e) {}
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Finds and disables/removes transparent clickjacking overlays placed over the player
+      function removeInvisibleOverlays() {
+        try {
+          if (!document.body) return;
+          var elems = document.body.querySelectorAll('div, a, section, aside, span');
+          var wW = window.innerWidth || document.documentElement.clientWidth || 300;
+          var wH = window.innerHeight || document.documentElement.clientHeight || 300;
+
+          for (var i = 0; i < elems.length; i++) {
+            var el = elems[i];
+
+            // Protect video element and iframe player
+            if (el.tagName === 'VIDEO' || el.tagName === 'IFRAME') continue;
+            if (el.querySelector('video, iframe')) continue;
+
+            if (isPlayerControl(el)) continue;
+
+            // Protect standard control buttons
+            if (el.querySelector('button, input, select, svg, path')) continue;
+
+            var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
+            if (cls.includes('vjs-control-bar') || cls.includes('jw-controlbar') || cls.includes('plyr__controls')) {
+              continue;
+            }
+
+            var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+            if (!style) continue;
+
+            var pos = style.position;
+            if (pos === 'fixed' || pos === 'absolute') {
+              var rect = el.getBoundingClientRect();
+              var zIndex = parseInt(style.zIndex, 10);
+              var opacity = parseFloat(style.opacity);
+
+              var isCovering = (rect.width > wW * 0.3 && rect.height > wH * 0.3);
+              var isHighZ = (!isNaN(zIndex) && zIndex >= 5) || (pos === 'fixed');
+
+              if (isCovering || isHighZ) {
+                var bg = style.backgroundColor || '';
+                var isTransparent = opacity < 0.1 || bg === 'transparent' || bg.includes('rgba(0, 0, 0, 0)') || bg === 'rgba(0,0,0,0)';
+                var txt = (el.textContent || '').trim();
+
+                if ((isTransparent && txt.length < 50) || el.getAttribute('target') === '_blank') {
+                  try {
+                    el.style.setProperty('display', 'none', 'important');
+                    el.style.setProperty('pointer-events', 'none', 'important');
+                    el.remove();
+                  } catch(e) {}
+                }
+              }
+            }
+          }
+        } catch(e) {}
+      }
+
+      // Removes floating corner ad boxes, outstream video ads & leftover black box traces
+      function removeCornerAdBoxes() {
+        try {
+          if (!document.body) return;
+
+          var videoEl = document.querySelector('video');
+          var playerEl = document.querySelector('#player, .player, #jwplayer, .jwplayer, .video-js, #vidsrc-player, .vidsrc-player, #embed-player, .plyr, #iframe-player, .vjs-tech') || (videoEl ? videoEl.parentElement : null);
+
+          var wW = window.innerWidth || document.documentElement.clientWidth || 300;
+          var wH = window.innerHeight || document.documentElement.clientHeight || 300;
+          if (playerEl) {
+            var pRect = playerEl.getBoundingClientRect();
+            if (pRect.width > 100 && pRect.height > 100) {
+              wW = pRect.width;
+              wH = pRect.height;
+            }
+          }
+
+          var elems = document.body.querySelectorAll('div, aside, section, iframe, span, a, header, footer');
+          for (var i = 0; i < elems.length; i++) {
+            var el = elems[i];
+
+            // 1. Protect video element and active main iframe player
+            if (el.tagName === 'VIDEO' || el.querySelector('video')) continue;
+            if (el.tagName === 'IFRAME') {
+              var iframeRect = el.getBoundingClientRect();
+              if (iframeRect.width > wW * 0.75 && iframeRect.height > wH * 0.75) continue;
+            }
+
+            if (isPlayerControl(el)) continue;
+
+            // 2. Protect ONLY standard interactive control buttons & sliders
+            if (el.querySelector('button, input, select, svg, path')) continue;
+
+            var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
+            if (cls.includes('vjs-control-bar') || cls.includes('jw-controlbar') ||
+                cls.includes('plyr__controls') || cls.includes('vjs-progress') ||
+                cls.includes('vjs-time') || cls.includes('vjs-volume') ||
+                cls.includes('vjs-fullscreen') || cls.includes('vjs-play-control') ||
+                cls.includes('vjs-volume-panel')) {
+              continue;
+            }
+
+            var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+            if (!style) continue;
+
+            var pos = style.position;
+            if (pos === 'fixed' || pos === 'absolute' || pos === 'relative') {
+              var rect = el.getBoundingClientRect();
+              if (rect.width <= 10 || rect.height <= 10) continue;
+
+              // Check if it's smaller than the main full video player frame
+              var isSmaller = (rect.width < wW * 0.95 || rect.height < wH * 0.95);
+
+              if (isSmaller) {
+                var bg = style.backgroundColor || style.background || '';
+                var isDarkOrBlack = bg.includes('rgb(0, 0, 0)') || bg === 'black' || bg === '#000' || bg.includes('rgba(0, 0, 0') || bg.includes('rgb(1') || bg.includes('rgb(2');
+                var isTransparent = parseFloat(style.opacity) < 0.1 || bg === 'transparent' || bg.includes('rgba(0, 0, 0, 0)');
+
+                var hasAdKeyword = cls.includes('ad') || cls.includes('pop') || cls.includes('banner') ||
+                                   cls.includes('push') || cls.includes('widget') || cls.includes('sticky') ||
+                                   cls.includes('float') || cls.includes('corner') || cls.includes('box') ||
+                                   cls.includes('vdo') || cls.includes('outstream') || cls.includes('companion') ||
+                                   cls.includes('vast') || cls.includes('overlay') || cls.includes('slide') ||
+                                   cls.includes('preroll') || cls.includes('midroll') || cls.includes('postroll') ||
+                                   cls.includes('notice') || cls.includes('top') || cls.includes('right') ||
+                                   cls.includes('layer');
+
+                var hasHiddenAdChild = el.querySelector('iframe, a[target="_blank"], [style*="display: none"], [style*="visibility: hidden"]');
+                var txt = (el.textContent || '').trim();
+
+                // If it's a positioned sub-box with no video element or controls inside it:
+                if (hasAdKeyword || hasHiddenAdChild || isDarkOrBlack || isTransparent || txt.length < 50 || isAdOrFakePopupText(txt)) {
+                  try {
+                    el.style.setProperty('display', 'none', 'important');
+                    el.style.setProperty('visibility', 'hidden', 'important');
+                    el.style.setProperty('pointer-events', 'none', 'important');
+                    el.remove();
+                  } catch(e) {}
+                }
+              }
             }
           }
         } catch(e) {}
@@ -430,13 +901,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
             var hasMedia = el.querySelector('video, iframe, canvas');
             if (hasMedia) continue;
 
-            var isControls = el.querySelector('button, input, [class*="control"], [class*="player"], [class*="vidlink"], [class*="vjs"], [class*="jw"], [class*="plyr"]');
+            var isControls = isPlayerControl(el) || el.querySelector('button, input, [class*="control"], [class*="player"], [class*="vidlink"], [class*="vjs"], [class*="jw"], [class*="plyr"]');
             if (isControls) continue;
 
             var txt = (el.textContent || '').toLowerCase();
             if (txt.length > 300) continue;
 
-            if (isFakeCallText(txt)) {
+            if (isAdOrFakePopupText(txt)) {
               try { el.remove(); } catch(e) {}
               continue;
             }
@@ -484,18 +955,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         } catch(e) {}
       }
 
+      var _isPurging = false;
       function purgeLoadersAndAds() {
-        disablePopups();
-        injectAdBlockStyles();
-        removeFloatingAdOverlays();
-        removeFakeCallPopups();
-
+        if (_isPurging) return;
+        _isPurging = true;
         try {
+          disablePopups();
+          injectAdBlockStyles();
+          removeFloatingAdOverlays();
+          removeInvisibleOverlays();
+          removeCornerAdBoxes();
+          removeFakeCallPopups();
+          removeLeftoverBlackBoxes();
+          removeAdLeftovers();   // NEW
+
           var links = document.querySelectorAll('a[target="_blank"], iframe[src*="/ads/"], iframe[src*="adsterra"], iframe[src*="monetag"]');
           for (var i = 0; i < links.length; i++) {
             purgeDomNode(links[i]);
           }
         } catch(e) {}
+        _isPurging = false;
       }
 
       window.purgeLoadersAndAds = purgeLoadersAndAds;
@@ -505,9 +984,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         var eventsToBlock = ['click', 'touchstart', 'touchend', 'pointerdown', 'mousedown'];
         var handleInteraction = function(e) {
           disablePopups();
+          removeInvisibleOverlays();
+          removeCornerAdBoxes();
+          removeFakeCallPopups();
+          removeLeftoverBlackBoxes();
+          removeAdLeftovers();   // NEW
           var target = e.target;
-          while (target && target !== document.body && target !== document.documentElement) {
-            if (target.tagName === 'A') {
+          var depth = 0;
+          while (target && target !== document.body && target !== document.documentElement && depth < 6) {
+            var tag = target.tagName ? target.tagName.toUpperCase() : '';
+            if (tag === 'A') {
               var href = (target.getAttribute('href') || '').toLowerCase();
               var isTargetBlank = target.getAttribute('target') === '_blank';
               if (isTargetBlank || !isAllowedUrl(href)) {
@@ -519,7 +1005,32 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
                 return false;
               }
             }
+
+            var tStyle = window.getComputedStyle ? window.getComputedStyle(target) : null;
+            if (tStyle && (tStyle.position === 'fixed' || tStyle.position === 'absolute')) {
+              var zVal = parseInt(tStyle.zIndex, 10);
+              if (zVal > 5 || isNaN(zVal)) {
+                var hasMedia = target.querySelector('video, iframe');
+                var hasControl = isPlayerControl(target) || target.querySelector('button, svg, path, [class*="control"], [class*="vjs"], [class*="jw"], [class*="plyr"]');
+                if (!hasMedia && !hasControl) {
+                  var tText = (target.textContent || '').trim();
+                  if (tText.length < 50 || isAdOrFakePopupText(tText) || target.getAttribute('target') === '_blank') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    try {
+                      target.style.setProperty('display', 'none', 'important');
+                      target.style.setProperty('pointer-events', 'none', 'important');
+                      target.remove();
+                    } catch(err) {}
+                    return false;
+                  }
+                }
+              }
+            }
+
             target = target.parentElement;
+            depth++;
           }
         };
 
@@ -554,11 +1065,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         }, 400);
       }
 
-      // Slower periodic scan (was every 500ms, now every 2 seconds)
-      setInterval(purgeLoadersAndAds, 2000);
+      // Faster periodic scan (runs every 500ms)
+      setInterval(purgeLoadersAndAds, 500);
+
+      // Video playback event listeners to purge leftover ad boxes
+      try {
+        ['timeupdate', 'play', 'pause', 'seeked'].forEach(function(evt) {
+          document.addEventListener(evt, purgeLoadersAndAds, true);
+        });
+      } catch(e) {}
 
       try {
         var observer = new MutationObserver(function(mutations) {
+          if (_isPurging) return;
           for (var i = 0; i < mutations.length; i++) {
             if (mutations[i].addedNodes && mutations[i].addedNodes.length > 0) {
               schedulePurge();
@@ -809,9 +1328,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
     if (kAdNetworkKeywords.any((word) => lower.contains(word))) return true;
     if (kAdUrlPaths.any((path) => lower.contains(path))) return true;
 
-    // Special case: popups coming from vidsrc
-    if (lower.contains("vidsrc") &&
-        (lower.contains("/pop") || lower.contains("/out/") || lower.contains("/ad"))) {
+    // Special case: popups coming from vidsrc, vidplay, rcstream, cloudnest
+    if ((lower.contains("vidsrc") || lower.contains("vidplay") || lower.contains("rcstream") || lower.contains("cloudnest")) &&
+        (lower.contains("/pop") || lower.contains("/out/") || lower.contains("/ad") || lower.contains("/clk") || lower.contains("/redirect"))) {
       return true;
     }
     return false;
@@ -822,8 +1341,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   bool _shouldAllowUrl(String url, {required bool isMainFrame}) {
     final lower = url.toLowerCase();
 
-    // Empty iframes are fine
-    if (lower.startsWith("about:blank")) return true;
+    // Empty or internal scheme URLs are fine
+    if (lower.startsWith("about:blank") ||
+        lower.startsWith("data:") ||
+        lower.startsWith("blob:") ||
+        lower.startsWith("javascript:")) {
+      return true;
+    }
+
+    // Block non-http/https custom schemes (intents, apps, market, bet365, etc.)
+    final uri = Uri.tryParse(lower);
+    if (uri != null && uri.hasScheme && uri.scheme != 'http' && uri.scheme != 'https') {
+      debugPrint("Blocking non-web scheme URL: $lower");
+      return false;
+    }
 
     // 0. Just after minimize -> restore: no main-page navigation at all
     if (isMainFrame && DateTime.now().isBefore(_blockMainNavUntil)) {
@@ -837,23 +1368,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       return false;
     }
 
-    final playerHost = Uri.tryParse(_playerUrl)?.host.toLowerCase();
-
-    // 2. After the player has loaded, the main page must not jump to another site
+    // 2. Lock main frame after initial load to prevent redirect ads replacing the player
     if (isMainFrame && _hasLoadedOnce) {
-      final requestHost = Uri.tryParse(lower)?.host.toLowerCase();
-      if (playerHost != null &&
-          requestHost != null &&
-          playerHost != requestHost &&
-          !lower.contains(widget.tmdbId.toString())) {
-        debugPrint("Blocking post-load redirect to: $lower");
-        return false;
+      final currentUri = Uri.tryParse(_playerUrl);
+      final reqUri = Uri.tryParse(lower);
+      if (currentUri != null && reqUri != null) {
+        final isSameHost = reqUri.host.toLowerCase() == currentUri.host.toLowerCase();
+        if (!isSameHost) {
+          debugPrint("Blocking main frame navigation away from player host: $lower");
+          return false;
+        }
       }
     }
 
-    // 3. Only allow known video domains (or the current player's own host)
-    final isAllowedDomain = kAllowedDomains.any((domain) => lower.contains(domain)) ||
-        (playerHost != null && playerHost.isNotEmpty && lower.contains(playerHost));
+    final playerHost = Uri.tryParse(_playerUrl)?.host.toLowerCase();
+    final requestUri = Uri.tryParse(lower);
+    final requestHost = requestUri?.host.toLowerCase() ?? "";
+
+    // 3. Allow if domain is in our allowed domains list OR matches player host
+    final isAllowedDomain = kAllowedDomains.any((domain) => requestHost.contains(domain)) ||
+        (playerHost != null && playerHost.isNotEmpty && requestHost.contains(playerHost));
 
     if (isAllowedDomain || lower == _playerUrl.toLowerCase()) {
       return true;
@@ -872,7 +1406,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
       ) async {
     final url = request.url.toString().toLowerCase();
 
-    if (kAdNetworkKeywords.any((word) => url.contains(word))) {
+    if (_looksLikeAd(url)) {
       debugPrint("Intercepted and blocked ad resource: $url");
       return WebResourceResponse(
         contentType: 'text/javascript',
@@ -978,23 +1512,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   }
 
   // Fixes the black screen after minimize -> restore in full screen.
-  // Windows sometimes forgets to draw the webview after the window comes back.
-  // We wait a little, re-apply full screen, then wiggle the size by 1px.
+  // We use multiple size nudges (+1px) and JS window.resize events to force
+  // WebView2 on Windows to redraw its surface cleanly without leaving fullscreen mode.
   Future<void> _forceWebViewRepaint() async {
-    // In full screen the drawing surface comes back empty (black). Leaving and
-    // re-entering full screen once makes Windows rebuild it. In a small window
-    // this problem does not happen, so we only do it when in full screen.
-    if (_isFullScreen) {
-      await Future.delayed(const Duration(milliseconds: 300));
-      if (!mounted || _isMinimized) return;
-      await windowManager.setFullScreen(false);
-      await Future.delayed(const Duration(milliseconds: 250));
-      if (!mounted || _isMinimized) return;
-      await windowManager.setFullScreen(true);
-    }
-
     // Try a few times, because Windows may need some time to finish restoring.
-    for (final delay in const [150, 500, 1200]) {
+    for (final delay in const [100, 300, 800]) {
       await Future.delayed(Duration(milliseconds: delay));
       if (!mounted || _isMinimized) return;
 
@@ -1433,7 +1955,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
   // The ONE webview used on Windows, Android and iOS.
   Widget _buildInAppWebView() {
     return InAppWebView(
-      key: const ValueKey("win_movie_player_webview"),
+      key: ValueKey(_playerUrl),
       // Only Windows has an environment. On mobile this is null, which is fine.
       webViewEnvironment: _webViewEnvironment,
       initialUrlRequest: URLRequest(url: WebUri(_playerUrl)),
@@ -1469,7 +1991,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         hardwareAcceleration: true,
         javaScriptEnabled: true,
         javaScriptCanOpenWindowsAutomatically: false,
-        supportMultipleWindows: false,
+        supportMultipleWindows: true,
         isInspectable: kDebugMode,
       ),
 
@@ -1550,12 +2072,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WindowListen
         final uri = navigationAction.request.url;
         if (uri == null) return NavigationActionPolicy.CANCEL;
 
+        final isMain = navigationAction.isForMainFrame;
+        final urlStr = uri.toString();
         final allowed = _shouldAllowUrl(
-          uri.toString(),
-          isMainFrame: navigationAction.isForMainFrame,
+          urlStr,
+          isMainFrame: isMain,
         );
 
-        return allowed ? NavigationActionPolicy.ALLOW : NavigationActionPolicy.CANCEL;
+        if (!allowed) {
+          debugPrint("Blocked navigation (${isMain ? 'main frame' : 'iframe'}): $urlStr");
+          return NavigationActionPolicy.CANCEL;
+        }
+
+        return NavigationActionPolicy.ALLOW;
       },
     );
   }
